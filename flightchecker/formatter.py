@@ -7,44 +7,42 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .models import FlightOffer, Itinerary
-
-
-def _fmt_duration(iso: str) -> str:
-    """PT1H25M -> 1h25m 형태로 간단 변환."""
-    out = iso.replace("PT", "").replace("H", "h").replace("M", "m")
-    return out.lower()
+from .models import FlightOffer
 
 
 def _fmt_time(dt: datetime) -> str:
     return dt.strftime("%m/%d %H:%M")
 
 
-def _format_itinerary(itin: Itinerary, offer: FlightOffer, label: str) -> str:
-    first = itin.segments[0]
-    last = itin.segments[-1]
-    stops = "직항" if itin.stops == 0 else f"{itin.stops}회 경유"
-    carriers = " / ".join(
-        sorted({offer.carrier_name(s.carrier_code) for s in itin.segments})
-    )
-    return (
-        f"  [{label}] {first.departure_airport} → {last.arrival_airport}  "
-        f"{_fmt_time(first.departure_time)} ~ {_fmt_time(last.arrival_time)}  "
-        f"({_fmt_duration(itin.duration)}, {stops})\n"
-        f"        ✈ {carriers}"
-    )
-
-
 def format_offer(offer: FlightOffer, index: int | None = None) -> str:
     """항공권 한 건을 여러 줄 텍스트로."""
     header_num = f"{index}. " if index is not None else ""
-    price = f"{offer.price:,.0f} {offer.currency}"
+    price = f"{offer.price:,.0f} {offer.currency}" if offer.price else "가격 정보 없음"
     lines = [f"{header_num}💰 {price}"]
 
-    labels = ["가는편", "오는편"]
-    for i, itin in enumerate(offer.itineraries):
-        label = labels[i] if i < len(labels) else f"여정{i + 1}"
-        lines.append(_format_itinerary(itin, offer, label))
+    if not offer.segments:
+        return "\n".join(lines)
+
+    first = offer.segments[0]
+    last = offer.segments[-1]
+    stops = "직항" if offer.stops == 0 else f"{offer.stops}회 경유"
+    airlines = " / ".join(sorted({s.airline for s in offer.segments if s.airline}))
+
+    lines.append(
+        f"  {first.departure_airport} → {last.arrival_airport}  "
+        f"{_fmt_time(first.departure_time)} ~ {_fmt_time(last.arrival_time)}  "
+        f"({offer.total_duration}, {stops})"
+    )
+    if airlines:
+        lines.append(f"        ✈ {airlines}")
+
+    # 경유가 있으면 구간별 상세를 덧붙임
+    if offer.stops > 0:
+        for seg in offer.segments:
+            lines.append(
+                f"          - {seg.departure_airport}→{seg.arrival_airport} "
+                f"{seg.airline} {seg.flight_number} ({seg.duration})"
+            )
     return "\n".join(lines)
 
 
@@ -68,8 +66,12 @@ def format_results(
         format_offer(o, i) for i, o in enumerate(offers[:limit], start=1)
     )
     cheapest = offers[0]
+    price_note = (
+        f"{cheapest.price:,.0f} {cheapest.currency}" if cheapest.price else "정보 없음"
+    )
+    round_note = " (왕복 총액)" if return_date else ""
     footer = (
-        f"\n\n최저가: {cheapest.price:,.0f} {cheapest.currency} "
-        f"(총 {len(offers)}건 중 상위 {min(limit, len(offers))}건 표시)"
+        f"\n\n최저가: {price_note}{round_note} "
+        f"· 총 {len(offers)}건 중 상위 {min(limit, len(offers))}건 표시"
     )
     return f"{title}\n\n{body}{footer}"

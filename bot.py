@@ -18,7 +18,7 @@ import os
 
 from dotenv import load_dotenv
 
-from flightchecker import AmadeusClient, AmadeusError, search_flights
+from flightchecker import FlightSearchError, SerpApiClient, search_flights
 from flightchecker.formatter import format_results
 
 load_dotenv()
@@ -29,12 +29,8 @@ USAGE = (
     "예) /flight ICN FUK 2026-06-06 2026-06-07"
 )
 
-# 토큰 캐시 재사용을 위해 클라이언트 하나를 공유
-_client = AmadeusClient(
-    client_id=os.getenv("AMADEUS_CLIENT_ID", ""),
-    client_secret=os.getenv("AMADEUS_CLIENT_SECRET", ""),
-    env=os.getenv("AMADEUS_ENV", "test"),
-)
+# 클라이언트 하나를 공유 (요청마다 새로 만들 필요 없음)
+_client = SerpApiClient(api_key=os.getenv("SERPAPI_KEY", ""))
 
 
 async def flight_command(update, context):
@@ -55,7 +51,7 @@ async def flight_command(update, context):
             return_date=return_date,
             client=_client,
         )
-    except AmadeusError as exc:
+    except FlightSearchError as exc:
         await update.message.reply_text(f"오류: {exc}")
         return
 

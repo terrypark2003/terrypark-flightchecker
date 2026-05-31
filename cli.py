@@ -11,13 +11,13 @@ from __future__ import annotations
 import argparse
 import sys
 
-from flightchecker import AmadeusError, search_flights
+from flightchecker import FlightSearchError, search_flights
 from flightchecker.formatter import format_results
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Amadeus 기반 항공권 검색기",
+        description="SerpApi(Google Flights) 기반 항공권 검색기",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="예: python cli.py ICN FUK 2026-06-06 -r 2026-06-07",
     )
@@ -28,7 +28,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adults", type=int, default=1, help="성인 인원 (기본 1)")
     parser.add_argument("--currency", default="KRW", help="통화 (기본 KRW)")
     parser.add_argument("--non-stop", action="store_true", help="직항만 검색")
-    parser.add_argument("--max", dest="max_results", type=int, default=10, help="가져올 후보 수")
     parser.add_argument("--limit", type=int, default=5, help="화면에 표시할 건수")
     args = parser.parse_args(argv)
 
@@ -41,9 +40,9 @@ def main(argv: list[str] | None = None) -> int:
             adults=args.adults,
             currency=args.currency,
             non_stop=args.non_stop,
-            max_results=args.max_results,
+            limit=args.limit,
         )
-    except AmadeusError as exc:
+    except FlightSearchError as exc:
         print(f"[오류] {exc}", file=sys.stderr)
         return 1
 

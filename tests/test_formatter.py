@@ -1,6 +1,6 @@
 """API 키 없이도 검증 가능한 단위 테스트 (모델 파싱 + 포매팅).
 
-실제 Amadeus 응답과 동일한 구조의 샘플 JSON으로 검증합니다.
+실제 SerpApi(Google Flights) 응답과 동일한 구조의 샘플 JSON으로 검증합니다.
 실행: python -m pytest  또는  python tests/test_formatter.py
 """
 
@@ -14,74 +14,51 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flightchecker.formatter import format_results  # noqa: E402
 from flightchecker.models import FlightOffer  # noqa: E402
 
+# SerpApi google_flights 응답의 best_flights / other_flights 항목 형태
 SAMPLE = {
-    "data": [
+    "best_flights": [
         {
-            "price": {"grandTotal": "185000.00", "currency": "KRW"},
-            "itineraries": [
+            "flights": [
                 {
-                    "duration": "PT1H25M",
-                    "segments": [
-                        {
-                            "carrierCode": "OZ",
-                            "number": "132",
-                            "departure": {"iataCode": "ICN", "at": "2026-06-06T09:00:00"},
-                            "arrival": {"iataCode": "FUK", "at": "2026-06-06T10:25:00"},
-                            "duration": "PT1H25M",
-                        }
-                    ],
-                },
-                {
-                    "duration": "PT1H30M",
-                    "segments": [
-                        {
-                            "carrierCode": "OZ",
-                            "number": "133",
-                            "departure": {"iataCode": "FUK", "at": "2026-06-07T18:00:00"},
-                            "arrival": {"iataCode": "ICN", "at": "2026-06-07T19:30:00"},
-                            "duration": "PT1H30M",
-                        }
-                    ],
-                },
+                    "departure_airport": {"id": "ICN", "name": "Incheon", "time": "2026-06-06 09:00"},
+                    "arrival_airport": {"id": "FUK", "name": "Fukuoka", "time": "2026-06-06 10:25"},
+                    "duration": 85,
+                    "airline": "Asiana Airlines",
+                    "flight_number": "OZ 132",
+                }
             ],
-        },
-        {
-            "price": {"grandTotal": "240000.00", "currency": "KRW"},
-            "itineraries": [
-                {
-                    "duration": "PT1H20M",
-                    "segments": [
-                        {
-                            "carrierCode": "KE",
-                            "number": "787",
-                            "departure": {"iataCode": "ICN", "at": "2026-06-06T07:30:00"},
-                            "arrival": {"iataCode": "FUK", "at": "2026-06-06T08:50:00"},
-                            "duration": "PT1H20M",
-                        }
-                    ],
-                },
-                {
-                    "duration": "PT1H25M",
-                    "segments": [
-                        {
-                            "carrierCode": "KE",
-                            "number": "788",
-                            "departure": {"iataCode": "FUK", "at": "2026-06-07T20:00:00"},
-                            "arrival": {"iataCode": "ICN", "at": "2026-06-07T21:25:00"},
-                            "duration": "PT1H25M",
-                        }
-                    ],
-                },
-            ],
-        },
+            "total_duration": 85,
+            "price": 185000,
+        }
     ],
-    "dictionaries": {"carriers": {"OZ": "ASIANA AIRLINES", "KE": "KOREAN AIR"}},
+    "other_flights": [
+        {
+            "flights": [
+                {
+                    "departure_airport": {"id": "ICN", "name": "Incheon", "time": "2026-06-06 07:30"},
+                    "arrival_airport": {"id": "NRT", "name": "Tokyo Narita", "time": "2026-06-06 10:00"},
+                    "duration": 150,
+                    "airline": "Korean Air",
+                    "flight_number": "KE 701",
+                },
+                {
+                    "departure_airport": {"id": "NRT", "name": "Tokyo Narita", "time": "2026-06-06 12:00"},
+                    "arrival_airport": {"id": "FUK", "name": "Fukuoka", "time": "2026-06-06 13:55"},
+                    "duration": 115,
+                    "airline": "Korean Air",
+                    "flight_number": "KE 787",
+                },
+            ],
+            "total_duration": 385,
+            "price": 240000,
+        }
+    ],
 }
 
 
 def _build_offers():
-    carriers = SAMPLE["dictionaries"]["carriers"]
-    offers = [FlightOffer.from_api(o, carriers) for o in SAMPLE["data"]]
+    raw = SAMPLE["best_flights"] + SAMPLE["other_flights"]
+    offers = [FlightOffer.from_api(o, currency="KRW", is_round_trip=True) for o in raw]
     offers.sort(key=lambda o: o.price)
     return offers
 
@@ -89,10 +66,11 @@ def _build_offers():
 def test_parsing():
     offers = _build_offers()
     assert len(offers) == 2
-    # 왕복이므로 여정 2개
-    assert len(offers[0].itineraries) == 2
-    # 직항 확인
-    assert offers[0].itineraries[0].stops == 0
+    # 첫 결과(직항)는 구간 1개
+    assert len(offers[0].segments) == 1
+    assert offers[0].stops == 0
+    # 경유편은 구간 2개, 경유 1회
+    assert offers[1].stops == 1
 
 
 def test_sorted_by_price():
@@ -101,9 +79,10 @@ def test_sorted_by_price():
     assert offers[1].price == 240000.0
 
 
-def test_carrier_name_lookup():
+def test_duration_formatting():
     offers = _build_offers()
-    assert offers[0].carrier_name("OZ") == "ASIANA AIRLINES"
+    assert offers[0].total_duration == "1h25m"
+    assert offers[0].segments[0].duration == "1h25m"
 
 
 def test_format_contains_key_info():
@@ -112,8 +91,9 @@ def test_format_contains_key_info():
     assert "ICN → FUK" in text
     assert "왕복" in text
     assert "185,000 KRW" in text
-    assert "ASIANA AIRLINES" in text
-    assert "가는편" in text and "오는편" in text
+    assert "Asiana Airlines" in text
+    assert "직항" in text
+    assert "경유" in text  # 두 번째 결과
 
 
 if __name__ == "__main__":

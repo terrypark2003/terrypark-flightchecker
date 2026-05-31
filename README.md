@@ -1,6 +1,6 @@
 # terrypark-flightchecker ✈️
 
-Amadeus API 기반 항공권 검색기. **지금은 CLI로**, **나중엔 텔레그램 봇으로** 같은 검색 로직을 그대로 쓸 수 있도록 코어 로직을 분리해 설계했습니다.
+SerpApi(Google Flights) 기반 항공권 검색기. **지금은 CLI로**, **나중엔 텔레그램 봇으로** 같은 검색 로직을 그대로 쓸 수 있도록 코어 로직을 분리해 설계했습니다.
 
 예) 6월 6일 출발 · 6월 7일 귀국, 인천(ICN) → 후쿠오카(FUK) 왕복:
 
@@ -12,10 +12,8 @@ python cli.py ICN FUK 2026-06-06 --return 2026-06-07
 🔎 ICN → FUK (왕복) 2026-06-06 ~ 2026-06-07
 
 1. 💰 185,000 KRW
-  [가는편] ICN → FUK  06/06 09:00 ~ 06/06 10:25  (1h25m, 직항)
-        ✈ ASIANA AIRLINES
-  [오는편] FUK → ICN  06/07 18:00 ~ 06/07 19:30  (1h30m, 직항)
-        ✈ ASIANA AIRLINES
+  ICN → FUK  06/06 09:00 ~ 06/06 10:25  (1h25m, 직항)
+        ✈ Asiana Airlines
 ...
 ```
 
@@ -23,7 +21,7 @@ python cli.py ICN FUK 2026-06-06 --return 2026-06-07
 
 ```
 flightchecker/          ← 코어 패키지 (CLI·봇 공통)
-  amadeus_client.py     ← Amadeus OAuth2 + 항공권 검색 API 호출
+  serpapi_client.py     ← SerpApi google_flights API 호출
   models.py             ← 응답 JSON → 다루기 쉬운 dataclass
   search.py             ← search_flights() : 어디서든 쓰는 검색 진입점
   formatter.py          ← 결과 → 사람이 읽는 텍스트 (CLI·텔레그램 공용)
@@ -46,14 +44,13 @@ pip install -r requirements.txt
 cp .env.example .env   # 그리고 발급받은 키 입력
 ```
 
-## Amadeus API 키 발급 (무료)
+## SerpApi 키 발급 (무료)
 
-1. https://developers.amadeus.com 가입
-2. **My Self-Service Workspace → Create New App**
-3. 발급된 **API Key / API Secret** 을 `.env` 의 `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET` 에 입력
+1. https://serpapi.com 접속 → **Sign Up** (이메일 또는 구글 계정, 카드 불필요)
+2. 가입/로그인 후 대시보드의 **Your Private API Key** 복사
+3. `.env` 의 `SERPAPI_KEY` 에 붙여넣기
 
-> `test` 환경은 무료지만 실제와 다른 테스트용 데이터가 일부 섞여 있습니다.
-> 실데이터가 필요하면 `AMADEUS_ENV=production` (별도 승인 필요).
+> 무료 등급은 **월 100회 검색**까지 가능합니다. 실제 구글 항공권 가격을 그대로 가져옵니다.
 
 ## 사용법 (CLI)
 
@@ -67,7 +64,7 @@ python cli.py ICN FUK 2026-06-06 --non-stop --adults 2
 # 옵션
 #   -r/--return  귀국일(왕복)   --currency 통화(기본 KRW)
 #   --non-stop   직항만         --adults   인원
-#   --max        후보 수        --limit    표시 건수
+#   --limit      표시 건수
 ```
 
 ## 텔레그램 봇으로 확장
@@ -94,6 +91,10 @@ python tests/test_formatter.py
 # 또는
 python -m pytest
 ```
+
+## 참고
+
+- 왕복 검색 시 SerpApi 1차 응답은 **가는편 여정 + 왕복 총액**을 줍니다. 오는편 상세 시간표는 `departure_token`으로 2차 조회가 필요하며, 현재는 가는편 여정과 총 가격 기준으로 보여줍니다.
 
 ## 자주 쓰는 공항 코드
 
