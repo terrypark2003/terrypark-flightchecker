@@ -67,20 +67,26 @@ python cli.py ICN FUK 2026-06-06 --non-stop --adults 2
 #   --limit      표시 건수
 ```
 
-## 텔레그램 봇으로 확장
+## 텔레그램 봇으로 검색
 
-`.env` 에 `TELEGRAM_BOT_TOKEN` (BotFather 발급) 추가 후:
+`.env` 에 `TELEGRAM_BOT_TOKEN` 추가 후 (봇 토큰은 텔레그램 [@BotFather](https://t.me/BotFather) 에서 `/newbot` 으로 발급):
 
 ```bash
-pip install python-telegram-bot
+pip install -r requirements.txt   # python-telegram-bot 포함
 python bot.py
 ```
 
-채팅에서:
+봇이 켜지면 텔레그램 채팅창에서:
 
 ```
-/flight ICN FUK 2026-06-06 2026-06-07
+/flight ICN FUK 2026-06-06 2026-06-07   # 왕복
+/flight ICN FUK 2026-06-06              # 편도
+/help                                    # 사용법
 ```
+
+- 입력창의 `/` 메뉴에 명령어가 자동 등록됩니다.
+- 날짜 형식(YYYY-MM-DD)이 틀리면 안내 메시지를 보냅니다.
+- 검색 로직은 CLI와 동일한 `flightchecker.search_flights()` 를 그대로 사용합니다.
 
 ## 테스트
 
