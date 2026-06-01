@@ -75,3 +75,34 @@ def format_results(
         f"· 총 {len(offers)}건 중 상위 {min(limit, len(offers))}건 표시"
     )
     return f"{title}\n\n{body}{footer}"
+
+
+def format_flexible(
+    results: list[tuple[str, str | None, float | None]],
+    origin: str,
+    destination: str,
+    currency: str = "KRW",
+) -> str:
+    """유연한 날짜 검색 결과를 날짜별 최저가 표로."""
+    has_return = any(r[1] for r in results)
+    trip = "왕복" if has_return else "편도"
+    title = f"📅 {origin} → {destination} ({trip}) 날짜별 최저가"
+
+    priced = [(o, r, p) for (o, r, p) in results if p]
+    best = min(priced, key=lambda x: x[2]) if priced else None
+
+    lines = [title, ""]
+    for out, ret, price in results:
+        date_label = out + (f"~{ret}" if ret else "")
+        if price is None:
+            lines.append(f"  {date_label} : -")
+            continue
+        mark = "  ⭐" if best and (out, ret, price) == best else ""
+        lines.append(f"  {date_label} : {price:,.0f} {currency}{mark}")
+
+    if best:
+        b_out, b_ret, b_price = best
+        b_label = b_out + (f"~{b_ret}" if b_ret else "")
+        lines.append("")
+        lines.append(f"가장 싼 날: {b_label} · {b_price:,.0f} {currency}")
+    return "\n".join(lines)

@@ -9,6 +9,10 @@ __pycache__/
 venv/
 env/
 
+# 가격 알림 저장 파일 (런타임 생성)
+watches.json
+watches.json.tmp
+
 # 기타
 .DS_Store
 *.log

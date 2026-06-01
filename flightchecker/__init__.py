@@ -4,13 +4,20 @@ CLI(cli.py)와 텔레그램 봇(bot.py)이 모두 이 패키지를 import해서 
 """
 
 from .models import FlightOffer, FlightSegment
-from .search import search_flights
+from .search import search_flights, search_flexible_dates, cheapest_price
 from .serpapi_client import SerpApiClient, FlightSearchError
+from .airports import resolve_airport
+from .watchstore import Watch, WatchStore
 
 __all__ = [
     "FlightOffer",
     "FlightSegment",
     "search_flights",
+    "search_flexible_dates",
+    "cheapest_price",
     "SerpApiClient",
     "FlightSearchError",
+    "resolve_airport",
+    "Watch",
+    "WatchStore",
 ]

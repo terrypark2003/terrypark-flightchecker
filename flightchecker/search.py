@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -58,3 +59,61 @@ def search_flights(
     ]
     offers.sort(key=lambda o: o.price if o.price else float("inf"))
     return offers[:limit]
+
+
+def cheapest_price(offers: list[FlightOffer]) -> float | None:
+    """오퍼 목록에서 최저가를 반환 (없으면 None)."""
+    prices = [o.price for o in offers if o.price]
+    return min(prices) if prices else None
+
+
+def search_flexible_dates(
+    origin: str,
+    destination: str,
+    base_date: str,
+    flex_days: int = 3,
+    return_date: str | None = None,
+    trip_length: int | None = None,
+    currency: str = "KRW",
+    non_stop: bool = False,
+    client: SerpApiClient | None = None,
+) -> list[tuple[str, str | None, float | None]]:
+    """기준일 ±flex_days 범위에서 날짜별 최저가를 조사.
+
+    반환: [(출발일, 귀국일|None, 최저가|None), ...] (출발일 오름차순)
+
+    왕복인 경우:
+      - trip_length(여행 일수)를 주면 출발일마다 그만큼 뒤를 귀국일로 잡습니다.
+      - 안 주면 base_date~return_date 간격을 여행 일수로 사용합니다.
+    """
+    client = client or _build_client()
+    base = datetime.strptime(base_date, "%Y-%m-%d")
+
+    if return_date and trip_length is None:
+        trip_length = (datetime.strptime(return_date, "%Y-%m-%d") - base).days
+
+    results: list[tuple[str, str | None, float | None]] = []
+    for delta in range(-flex_days, flex_days + 1):
+        out = base + timedelta(days=delta)
+        out_str = out.strftime("%Y-%m-%d")
+        ret_str = (
+            (out + timedelta(days=trip_length)).strftime("%Y-%m-%d")
+            if trip_length is not None
+            else None
+        )
+        try:
+            offers = search_flights(
+                origin=origin,
+                destination=destination,
+                departure_date=out_str,
+                return_date=ret_str,
+                currency=currency,
+                non_stop=non_stop,
+                client=client,
+            )
+            results.append((out_str, ret_str, cheapest_price(offers)))
+        except Exception:
+            # 특정 날짜 검색이 실패해도 전체는 계속 진행
+            results.append((out_str, ret_str, None))
+
+    return results
