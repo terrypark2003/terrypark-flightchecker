@@ -1,0 +1,17 @@
+[Unit]
+Description=Terrypark Flight Checker Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 아래 두 경로는 실제 사용자/설치 위치에 맞게 setup_server.sh 가 자동 치환합니다.
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/.venv/bin/python __APP_DIR__/bot.py
+EnvironmentFile=__APP_DIR__/.env
+Restart=always
+RestartSec=5
+User=__RUN_USER__
+
+[Install]
+WantedBy=multi-user.target

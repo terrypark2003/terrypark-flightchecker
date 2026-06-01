@@ -88,24 +88,36 @@ python bot.py
 - 날짜 형식(YYYY-MM-DD)이 틀리면 안내 메시지를 보냅니다.
 - 검색 로직은 CLI와 동일한 `flightchecker.search_flights()` 를 그대로 사용합니다.
 
-## 봇 24시간 켜두기 (Railway 배포)
+## 봇 24시간 켜두기
 
-PC를 꺼도 봇이 살아있게 클라우드(Railway)에 올립니다.
+PC를 꺼도 봇이 살아있게 클라우드에 올립니다. 두 가지 방법:
 
-1. [railway.app](https://railway.app) 가입 (GitHub 계정으로 로그인)
-2. **New Project → Deploy from GitHub repo** → 이 저장소 선택 → 브랜치 `claude/epic-gauss-Eodjx`
-3. 배포가 시작되면 **Variables** 탭에서 환경변수 2개 추가:
-   - `SERPAPI_KEY` = SerpApi 키
-   - `TELEGRAM_BOT_TOKEN` = 텔레그램 봇 토큰
-4. Railway가 `Procfile`/`railway.json` 을 읽어 `python bot.py` 를 자동 실행합니다.
+### A. 완전 무료 — Oracle Cloud Always Free (평생 무료)
+평생 무료 VM에 올려 24시간 운영합니다. 설치 스크립트가 systemd 등록까지
+자동으로 해줘서, 봇이 꺼지거나 서버가 재부팅돼도 자동 재시작됩니다.
+→ 자세한 단계: [`deploy/ORACLE_CLOUD.md`](deploy/ORACLE_CLOUD.md)
 
-> 한 PC와 클라우드에서 같은 봇 토큰으로 동시에 실행하면 충돌합니다.
+```bash
+# 서버(Ubuntu)에서:
+git clone https://github.com/terrypark2003/terrypark-flightchecker.git
+cd terrypark-flightchecker && git checkout claude/epic-gauss-Eodjx
+cp .env.example .env && nano .env   # 키 입력
+bash deploy/setup_server.sh
+```
+
+### B. 간편 — Railway (무료 크레딧 후 소액)
+[railway.app](https://railway.app) 가입 → Deploy from GitHub repo → 이 저장소,
+브랜치 `claude/epic-gauss-Eodjx` 선택 → **Variables** 에 `SERPAPI_KEY`,
+`TELEGRAM_BOT_TOKEN` 입력. `Procfile`/`railway.json` 으로 자동 실행됩니다.
+
+> 같은 봇 토큰을 PC와 클라우드에서 동시에 실행하면 충돌합니다.
 > 클라우드에 올린 뒤에는 로컬 `python bot.py` 는 꺼두세요.
 
 배포용 파일:
 - `Procfile` — 실행 명령(`worker: python bot.py`)
 - `railway.json` — 빌드/재시작 정책
 - `runtime.txt` — Python 버전 고정
+- `deploy/` — Oracle Cloud용 systemd 서비스 + 설치 스크립트
 
 ## 테스트
 
