@@ -130,6 +130,40 @@ bash deploy/setup_server.sh
 - `runtime.txt` — Python 버전 고정
 - `deploy/` — Oracle Cloud용 systemd 서비스 + 설치 스크립트
 
+### C. 무료 서버리스 — Vercel (검색 전용, 웹훅 방식)
+
+항상 켜진 서버 없이 Vercel 무료(Hobby)로 운영합니다. 텔레그램이 메시지마다
+`api/webhook.py` 함수를 호출하는 **웹훅 방식**입니다.
+
+> 서버리스에는 항상 켜진 프로세스가 없어 **가격 알림(`/watch`)은 제외**됩니다.
+> 검색 기능(`/flight`, `/flex`, `/menu`, `/help`)만 제공합니다.
+
+1. [vercel.com](https://vercel.com) 가입 (GitHub 로그인) → **Add New → Project** →
+   이 저장소 import → 브랜치 `claude/epic-gauss-Eodjx`
+2. **Environment Variables** 에 추가:
+   - `TELEGRAM_BOT_TOKEN` = 봇 토큰
+   - `SERPAPI_KEY` = SerpApi 키
+   - (선택) `WEBHOOK_SECRET` = 아무 임의 문자열 (웹훅 보안 강화)
+3. **Deploy** → 배포 완료되면 URL 확인 (예: `https://xxxx.vercel.app`)
+4. 텔레그램에 웹훅 등록 (로컬 PC에서 한 번만):
+   ```bash
+   # .env 에 TELEGRAM_BOT_TOKEN (그리고 설정했다면 WEBHOOK_SECRET) 넣고
+   python scripts/set_webhook.py set https://xxxx.vercel.app
+   python scripts/set_webhook.py info   # 등록 확인
+   ```
+
+이후 텔레그램에서 바로 `/flight 인천 후쿠오카 2026-06-06 2026-06-07` 사용.
+
+서버리스용 파일:
+- `api/webhook.py` — Vercel 함수(웹훅 엔드포인트)
+- `flightchecker/botlogic.py` — 프레임워크 독립 봇 로직(requests 기반)
+- `vercel.json` — 함수 설정(타임아웃 60s)
+- `scripts/set_webhook.py` — 웹훅 등록/확인/해제 도구
+
+> 폴링 봇(`bot.py`)과 웹훅을 **동시에** 쓰면 충돌합니다. Vercel로 옮겼다면
+> 다른 곳의 `python bot.py` 는 끄고, 웹훅만 등록된 상태로 두세요.
+> (폴링으로 되돌리려면 `python scripts/set_webhook.py delete` 후 봇 재실행)
+
 ## 테스트
 
 API 키 없이도 파싱·포매팅 로직을 검증합니다 (모의 응답 사용):
