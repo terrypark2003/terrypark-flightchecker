@@ -282,6 +282,44 @@ def test_pricehistory_record_series_baseline():
         assert len(PriceHistory(path=path).series("ICN", "FUK", dep, None)) == 3
 
 
+def test_stores_create_missing_parent_dirs():
+    """저장 경로의 폴더가 없어도 자동 생성 (볼륨 미마운트·경로 오타 대비)."""
+    with tempfile.TemporaryDirectory() as d:
+        hist = PriceHistory(path=os.path.join(d, "없는폴더", "h.json"))
+        hist.record("ICN", "FUK", "2026-08-01", None, 100000,
+                    at=datetime(2026, 7, 1))
+        assert len(hist.series("ICN", "FUK", "2026-08-01", None)) == 1
+
+        store = WatchStore(path=os.path.join(d, "다른폴더", "w.json"))
+        assert store.add(Watch(chat_id=1, origin="ICN", destination="FUK",
+                               departure_date="2026-08-01", return_date=None,
+                               target_price=100000)) is True
+
+
+def test_env_paths_are_stripped():
+    """WATCH_DB/PRICE_DB 값 앞뒤의 탭·공백은 무시된다."""
+    import importlib
+
+    from flightchecker import pricehistory, watchstore
+
+    old_watch, old_price = os.environ.get("WATCH_DB"), os.environ.get("PRICE_DB")
+    try:
+        os.environ["WATCH_DB"] = "\t/data/watches.json"
+        os.environ.pop("PRICE_DB", None)
+        importlib.reload(watchstore)
+        importlib.reload(pricehistory)
+        assert watchstore._DEFAULT_PATH == "/data/watches.json"
+        assert pricehistory._default_path() == "/data/price_history.json"
+    finally:
+        for key, value in (("WATCH_DB", old_watch), ("PRICE_DB", old_price)):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        importlib.reload(watchstore)
+        importlib.reload(pricehistory)
+
+
 def test_pricehistory_prunes_departed_routes():
     with tempfile.TemporaryDirectory() as d:
         hist = PriceHistory(path=os.path.join(d, "h.json"))

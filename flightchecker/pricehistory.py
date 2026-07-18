@@ -21,9 +21,11 @@ KEEP_PAST_DAYS = 2          # 출발일이 지난 노선은 이틀 뒤 정리
 
 
 def _default_path() -> str:
-    if os.getenv("PRICE_DB"):
-        return os.environ["PRICE_DB"]
-    watch_db = os.getenv("WATCH_DB")
+    # 환경변수 값에 실수로 섞인 공백/탭은 제거 (Railway 변수 붙여넣기 실수 대비)
+    price_db = os.getenv("PRICE_DB", "").strip()
+    if price_db:
+        return price_db
+    watch_db = os.getenv("WATCH_DB", "").strip()
     if watch_db:
         # 가격 알림 파일과 같은 폴더(Railway 볼륨 등)에 저장
         return os.path.join(os.path.dirname(watch_db) or ".", "price_history.json")
@@ -52,6 +54,9 @@ class PriceHistory:
             self._data = {}
 
     def _save(self) -> None:
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False)
