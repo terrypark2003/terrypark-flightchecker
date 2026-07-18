@@ -77,6 +77,38 @@ def format_results(
     return f"{title}\n\n{body}{footer}"
 
 
+def format_multi(
+    offers: list[FlightOffer],
+    legs: list[tuple[str, str, str]],
+    limit: int = 5,
+) -> str:
+    """다구간 검색 결과를 메시지 한 덩어리로.
+
+    가격은 전체 여정 총액, 표시 일정은 첫 구간 기준입니다.
+    """
+    route = " → ".join([legs[0][0]] + [d for _, d, _ in legs])
+    lines = [f"🔎 다구간 {route}"]
+    for i, (o, d, date) in enumerate(legs, start=1):
+        lines.append(f"  구간{i}. {o}→{d} {date}")
+    title = "\n".join(lines)
+
+    if not offers:
+        return f"{title}\n\n조건에 맞는 항공권을 찾지 못했습니다."
+
+    body = "\n\n".join(
+        format_offer(o, i) for i, o in enumerate(offers[:limit], start=1)
+    )
+    cheapest = offers[0]
+    price_note = (
+        f"{cheapest.price:,.0f} {cheapest.currency}" if cheapest.price else "정보 없음"
+    )
+    footer = (
+        f"\n\n최저가: {price_note} (전체 여정 총액, 일정은 첫 구간 기준) "
+        f"· 총 {len(offers)}건 중 상위 {min(limit, len(offers))}건 표시"
+    )
+    return f"{title}\n\n{body}{footer}"
+
+
 def format_flexible(
     results: list[tuple[str, str | None, float | None]],
     origin: str,

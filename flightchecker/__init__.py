@@ -4,7 +4,14 @@ CLI(cli.py)와 텔레그램 봇(bot.py)이 모두 이 패키지를 import해서 
 """
 
 from .models import FlightOffer, FlightSegment
-from .search import search_flights, search_flexible_dates, cheapest_price, drop_layovers
+from .search import (
+    search_flights,
+    search_flexible_dates,
+    search_multi_city,
+    cheapest_price,
+    drop_layovers,
+    sort_offers,
+)
 from .serpapi_client import SerpApiClient, FlightSearchError
 from .airports import resolve_airport
 from .watchstore import Watch, WatchStore
@@ -17,8 +24,10 @@ __all__ = [
     "FlightSegment",
     "search_flights",
     "search_flexible_dates",
+    "search_multi_city",
     "cheapest_price",
     "drop_layovers",
+    "sort_offers",
     "SerpApiClient",
     "FlightSearchError",
     "resolve_airport",

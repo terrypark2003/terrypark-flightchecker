@@ -24,6 +24,18 @@ def _build_client() -> SerpApiClient:
 LONGHAUL_MINUTES = int(float(os.getenv("LONGHAUL_MIN_HOURS", "10")) * 60)
 
 
+def sort_offers(offers: list[FlightOffer]) -> list[FlightOffer]:
+    """직항 우선 + 가격 오름차순 정렬.
+
+    직항 그룹이 먼저 오고, 각 그룹 안에서는 싼 순서입니다.
+    (경유가 함께 표시되는 장거리 노선에서도 직항이 항상 위)
+    """
+    return sorted(
+        offers,
+        key=lambda o: (0 if o.stops == 0 else 1, o.price if o.price else float("inf")),
+    )
+
+
 def drop_layovers(offers: list[FlightOffer]) -> list[FlightOffer]:
     """경유 제외 정책.
 
@@ -79,8 +91,35 @@ def search_flights(
         FlightOffer.from_api(o, currency=currency, is_round_trip=is_round_trip)
         for o in raw_offers
     ]
-    offers = drop_layovers(offers)
-    offers.sort(key=lambda o: o.price if o.price else float("inf"))
+    offers = sort_offers(drop_layovers(offers))
+    return offers[:limit]
+
+
+def search_multi_city(
+    legs: list[tuple[str, str, str]],
+    adults: int = 1,
+    currency: str = "KRW",
+    non_stop: bool = False,
+    travel_class: int | None = None,
+    limit: int = 10,
+    client: SerpApiClient | None = None,
+) -> list[FlightOffer]:
+    """다구간 항공권 검색. legs: [(출발, 도착, 날짜), ...] (2~5개 구간)
+
+    SerpApi 다구간 응답은 왕복처럼 첫 구간 여정 + 전체 총액을 주므로,
+    표시되는 일정은 첫 구간 기준이고 가격은 전체 여정 총액입니다.
+    """
+    client = client or _build_client()
+    raw = client.multi_city_offers(
+        legs=legs,
+        adults=adults,
+        currency=currency,
+        non_stop=non_stop,
+        travel_class=travel_class,
+    )
+    raw_offers = raw.get("best_flights", []) + raw.get("other_flights", [])
+    offers = [FlightOffer.from_api(o, currency=currency) for o in raw_offers]
+    offers = sort_offers(drop_layovers(offers))
     return offers[:limit]
 
 

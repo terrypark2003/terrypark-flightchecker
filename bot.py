@@ -33,9 +33,10 @@ from flightchecker import (
     resolve_airport,
     search_flexible_dates,
     search_flights,
+    search_multi_city,
     skyscanner_url,
 )
-from flightchecker.formatter import format_flexible, format_results
+from flightchecker.formatter import format_flexible, format_multi, format_results
 
 load_dotenv()
 
@@ -57,6 +58,8 @@ HELP_TEXT = (
     "※ 경유 편은 기본 제외 (직항이 없거나 10시간 이상 장거리만 표시)\n\n"
     "*날짜별 최저가* (±3일 비교)\n"
     "`/flex 출발 도착 기준출발일 [귀국일]`\n\n"
+    "*다구간* — 출발 도착 날짜를 구간 수만큼 반복\n"
+    "`/multi 인천 도쿄 2026-06-06 도쿄 오사카 2026-06-08 오사카 인천 2026-06-10`\n\n"
     "*가격 알림*\n"
     "`/watch 출발 도착 출발일 [귀국일] 목표가`\n"
     "예) `/watch 인천 후쿠오카 2026-06-06 2026-06-07 200000`\n"
@@ -247,6 +250,66 @@ async def flex_command(update, context):
             _history.record(origin, destination, out_date, ret_date, price)
 
     text = format_flexible(results, origin, destination)
+    opt_note = describe_options(opts)
+    if opt_note:
+        text = f"⚙ {opt_note}\n{text}"
+    await update.message.reply_text(text)
+
+
+MULTI_USAGE = (
+    "사용법: /multi 출발 도착 날짜 출발 도착 날짜 ...  (2~5개 구간)\n"
+    "예) /multi 인천 도쿄 2026-06-06 도쿄 오사카 2026-06-08 오사카 인천 2026-06-10\n"
+    "옵션도 됩니다: 직항 2명 비즈니스"
+)
+
+
+async def multi_command(update, context):
+    if _client is None:
+        await update.message.reply_text("서버에 SERPAPI_KEY 가 설정되지 않았습니다.")
+        return
+
+    args, opts = parse_search_options(context.args)
+    if len(args) < 6 or len(args) % 3 != 0:
+        await update.message.reply_text(MULTI_USAGE)
+        return
+
+    chunks = [args[i:i + 3] for i in range(0, len(args), 3)]
+    if len(chunks) > 5:
+        await update.message.reply_text("구간은 최대 5개까지 가능합니다.")
+        return
+
+    legs: list[tuple[str, str, str]] = []
+    for leg_origin, leg_dest, leg_date in chunks:
+        try:
+            origin, destination = _resolve_pair(leg_origin, leg_dest)
+        except ValueError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        if not _is_valid_date(leg_date):
+            await update.message.reply_text(f"날짜 형식 오류: {leg_date} (YYYY-MM-DD 로 입력)")
+            return
+        legs.append((origin, destination, leg_date))
+
+    # 구간 날짜가 순서대로인지 확인
+    dates = [d for _, _, d in legs]
+    if dates != sorted(dates):
+        await update.message.reply_text("구간 날짜가 순서대로가 아닙니다. 이동 순서대로 입력해 주세요.")
+        return
+
+    await update.message.reply_text(f"🔎 다구간 {len(legs)}개 구간을 검색 중입니다...")
+    try:
+        offers = search_multi_city(
+            legs,
+            non_stop=opts["non_stop"],
+            adults=opts["adults"],
+            travel_class=opts["travel_class"],
+            client=_client,
+        )
+    except FlightSearchError as exc:
+        await update.message.reply_text(f"검색 오류: {exc}")
+        return
+
+    text = format_multi(offers, legs)
     opt_note = describe_options(opts)
     if opt_note:
         text = f"⚙ {opt_note}\n{text}"
@@ -679,6 +742,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["start", "help"], start_command))
     app.add_handler(CommandHandler("flight", flight_command))
     app.add_handler(CommandHandler("flex", flex_command))
+    app.add_handler(CommandHandler("multi", multi_command))
     app.add_handler(CommandHandler("watch", watch_command))
     app.add_handler(CommandHandler("watches", watches_command))
     app.add_handler(CommandHandler("unwatch", unwatch_command))
@@ -696,6 +760,7 @@ def main() -> None:
             [
                 BotCommand("flight", "항공권 검색"),
                 BotCommand("flex", "날짜별 최저가 (±3일)"),
+                BotCommand("multi", "다구간 검색"),
                 BotCommand("watch", "가격 알림 등록"),
                 BotCommand("watches", "내 알림 목록"),
                 BotCommand("unwatch", "알림 삭제"),

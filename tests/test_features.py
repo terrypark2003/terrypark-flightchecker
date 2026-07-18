@@ -20,7 +20,8 @@ from flightchecker.links import google_flights_url, skyscanner_url  # noqa: E402
 from flightchecker.models import FlightOffer, FlightSegment  # noqa: E402
 from flightchecker.options import describe_options, parse_search_options  # noqa: E402
 from flightchecker.pricehistory import PriceHistory  # noqa: E402
-from flightchecker.search import drop_layovers  # noqa: E402
+from flightchecker.search import drop_layovers, search_multi_city, sort_offers  # noqa: E402
+from flightchecker.formatter import format_multi  # noqa: E402
 from flightchecker.watchstore import Watch, WatchStore  # noqa: E402
 
 
@@ -165,6 +166,85 @@ def test_drop_layovers_keeps_all_when_no_nonstop():
 def test_drop_layovers_keeps_all_on_longhaul():
     offers = [_offer(stops=0, minutes=13 * 60), _offer(stops=1, minutes=16 * 60)]
     assert drop_layovers(offers) == offers    # 직항도 10시간 이상이면 경유 포함
+
+
+def test_sort_offers_nonstop_first_then_price():
+    """직항 우선, 그 안에서 가격 오름차순."""
+    offers = [
+        _offer(stops=1, minutes=800, price=90000),    # 경유인데 제일 쌈
+        _offer(stops=0, minutes=700, price=150000),   # 직항 비싼 편
+        _offer(stops=0, minutes=700, price=120000),   # 직항 싼 편
+        _offer(stops=2, minutes=900, price=80000),
+    ]
+    ordered = sort_offers(offers)
+    assert [(o.stops == 0, o.price) for o in ordered] == [
+        (True, 120000), (True, 150000), (False, 80000), (False, 90000),
+    ]
+
+
+# ---- 다구간 검색 -------------------------------------------------------
+
+class _FakeMultiClient:
+    """multi_city_offers 호출 인자를 기록하고 모의 응답을 돌려주는 클라이언트."""
+
+    def __init__(self):
+        self.called_with = None
+
+    def multi_city_offers(self, legs, **kwargs):
+        self.called_with = {"legs": legs, **kwargs}
+        return {
+            "best_flights": [
+                {
+                    "flights": [
+                        {
+                            "departure_airport": {"id": "ICN", "time": "2026-06-06 09:00"},
+                            "arrival_airport": {"id": "NRT", "time": "2026-06-06 11:30"},
+                            "duration": 150,
+                            "airline": "Korean Air",
+                            "flight_number": "KE 701",
+                        }
+                    ],
+                    "total_duration": 150,
+                    "price": 550000,
+                }
+            ],
+            "other_flights": [],
+        }
+
+
+def test_search_multi_city_passes_legs_and_parses():
+    legs = [
+        ("ICN", "NRT", "2026-06-06"),
+        ("NRT", "KIX", "2026-06-08"),
+        ("KIX", "ICN", "2026-06-10"),
+    ]
+    fake = _FakeMultiClient()
+    offers = search_multi_city(legs, non_stop=True, adults=2, client=fake)
+
+    assert fake.called_with["legs"] == legs
+    assert fake.called_with["non_stop"] is True
+    assert fake.called_with["adults"] == 2
+    assert len(offers) == 1
+    assert offers[0].price == 550000
+    assert offers[0].stops == 0
+
+
+def test_format_multi_shows_route_and_total():
+    legs = [
+        ("ICN", "NRT", "2026-06-06"),
+        ("NRT", "KIX", "2026-06-08"),
+        ("KIX", "ICN", "2026-06-10"),
+    ]
+    offers = [_offer(stops=0, minutes=150, price=550000)]
+    text = format_multi(offers, legs)
+    assert "다구간 ICN → NRT → KIX → ICN" in text
+    assert "구간1. ICN→NRT 2026-06-06" in text
+    assert "구간3. KIX→ICN 2026-06-10" in text
+    assert "550,000" in text
+    assert "전체 여정 총액" in text
+
+    empty = format_multi([], legs)
+    assert "찾지 못했습니다" in empty
 
 
 # ---- 가격 이력 저장소 --------------------------------------------------
