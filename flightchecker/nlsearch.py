@@ -43,7 +43,7 @@ JSON 스키마:
   "return_date": "YYYY-MM-DD 또는 null(편도)",
   "legs": [["출발IATA", "도착IATA", "YYYY-MM-DD"], ...],
   "adults": 1,
-  "non_stop": false,
+  "non_stop": true,
   "travel_class": null,
   "target_price": null,
   "clarification": null
@@ -53,6 +53,7 @@ JSON 스키마:
 - intent 판단: 날짜가 대략적이거나 유연하면("~쯤", "근처", "아무 날이나", "싼 날") "flex". "떨어지면/싸지면/이하면 알려줘" 등 가격 알림 요청이면 "watch" (target_price 필수, "30만원"→300000). 경유지를 들르는 여정(도시 3곳 이상 이동)이면 "multi" (legs 채우기, 2~5개). 그 외 일반 검색은 "search".
 - 상대 날짜("다음 주 금요일", "이번 주말", "8월 초")는 오늘 날짜 기준으로 YYYY-MM-DD로 계산. "8월 초"처럼 범위면 대표 날짜 하나 고르고 intent는 "flex".
 - 도시→IATA 예: 서울/인천→ICN, 김포→GMP, 부산→PUS, 제주→CJU, 도쿄→NRT, 오사카→KIX, 후쿠오카→FUK, 삿포로→CTS, 오키나와→OKA, 방콕→BKK, 다낭→DAD, 하노이→HAN, 타이베이→TPE, 홍콩→HKG, 싱가포르→SIN, 파리→CDG, 런던→LHR, 뉴욕→JFK, LA→LAX. 확실하지 않은 도시는 해당 도시의 대표 국제공항 IATA를 아는 만큼 정확히.
+- non_stop: 기본 true (직항만 검색). 사용자가 경유를 원한다고 명시할 때만 false.
 - travel_class: 이코노미=null, 프리미엄 이코노미=2, 비즈니스=3, 일등석=4
 - adults: 인원 언급 없으면 1. "둘이서/커플/부부"→2, "가족 4명"→4
 - 목적지·날짜를 알 수 없거나, 날짜가 과거이거나, 항공권과 무관한 요청이면 intent="unknown"으로 하고 clarification에 사용자에게 물어볼 한국어 질문 한 문장을 넣으세요.
@@ -100,7 +101,8 @@ def coerce_request(data: dict, today: datetime | None = None) -> dict:
         "return_date": None,
         "legs": [],
         "adults": 1,
-        "non_stop": bool(data.get("non_stop")),
+        # 직항이 기본. 모델이 명시적으로 false를 줄 때(사용자가 경유 원함)만 꺼짐
+        "non_stop": data.get("non_stop") is not False,
         "travel_class": None,
         "target_price": None,
         "clarification": data.get("clarification") or None,
@@ -217,8 +219,8 @@ def describe_request(req: dict) -> str:
         extras.append("±3일 최저가 비교")
     if req["intent"] == "watch" and req["target_price"]:
         extras.append(f"{req['target_price']:,.0f}원 이하 알림")
-    if req["non_stop"]:
-        extras.append("직항만")
+    if not req["non_stop"]:
+        extras.append("경유 포함")
     if req["adults"] > 1:
         extras.append(f"성인 {req['adults']}명")
     if req["travel_class"]:

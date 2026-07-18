@@ -26,7 +26,7 @@ from flightchecker.nlsearch import (  # noqa: E402
 )
 from flightchecker.options import describe_options, parse_search_options  # noqa: E402
 from flightchecker.pricehistory import PriceHistory  # noqa: E402
-from flightchecker.search import drop_layovers, search_multi_city, sort_offers  # noqa: E402
+from flightchecker.search import search_multi_city, sort_offers  # noqa: E402
 from flightchecker.formatter import format_multi  # noqa: E402
 from flightchecker.watchstore import Watch, WatchStore  # noqa: E402
 
@@ -125,19 +125,24 @@ def test_parse_search_options():
     assert opts == {"non_stop": True, "adults": 2, "travel_class": 3}
 
 
-def test_parse_search_options_defaults():
+def test_parse_search_options_defaults_to_nonstop():
     rest, opts = parse_search_options(["ICN", "FUK", "2026-06-06", "200000"])
     assert rest == ["ICN", "FUK", "2026-06-06", "200000"]
-    assert opts == {"non_stop": False, "adults": 1, "travel_class": None}
+    assert opts == {"non_stop": True, "adults": 1, "travel_class": None}
+
+
+def test_parse_search_options_layover_optin():
+    _, opts = parse_search_options(["ICN", "CDG", "2026-06-06", "경유포함"])
+    assert opts["non_stop"] is False
 
 
 def test_describe_options():
-    assert describe_options({"non_stop": True, "adults": 2, "travel_class": 4}) \
-        == "직항만 · 성인 2명 · 일등석"
-    assert describe_options({"non_stop": False, "adults": 1, "travel_class": None}) == ""
+    assert describe_options({"non_stop": False, "adults": 2, "travel_class": 4}) \
+        == "경유 포함 · 성인 2명 · 일등석"
+    assert describe_options({"non_stop": True, "adults": 1, "travel_class": None}) == ""
 
 
-# ---- 경유 제외 정책 ----------------------------------------------------
+# ---- 정렬 (직항 우선 + 가격순) -----------------------------------------
 
 def _offer(stops: int, minutes: int, price: float = 100000) -> FlightOffer:
     """테스트용 오퍼 생성 (stops만큼 경유 구간 추가)."""
@@ -155,23 +160,6 @@ def _offer(stops: int, minutes: int, price: float = 100000) -> FlightOffer:
         price=price, currency="KRW", segments=segments,
         total_duration=f"{minutes}m", duration_minutes=minutes,
     )
-
-
-def test_drop_layovers_short_haul_removes_stops():
-    offers = [_offer(stops=0, minutes=85), _offer(stops=1, minutes=300, price=80000)]
-    kept = drop_layovers(offers)
-    assert all(o.stops == 0 for o in kept)   # 단거리는 직항만
-    assert len(kept) == 1
-
-
-def test_drop_layovers_keeps_all_when_no_nonstop():
-    offers = [_offer(stops=1, minutes=900), _offer(stops=2, minutes=1100)]
-    assert drop_layovers(offers) == offers    # 직항이 없으면 경유 유지
-
-
-def test_drop_layovers_keeps_all_on_longhaul():
-    offers = [_offer(stops=0, minutes=13 * 60), _offer(stops=1, minutes=16 * 60)]
-    assert drop_layovers(offers) == offers    # 직항도 10시간 이상이면 경유 포함
 
 
 def test_sort_offers_nonstop_first_then_price():

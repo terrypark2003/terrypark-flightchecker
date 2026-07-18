@@ -9,7 +9,6 @@ from .search import (
     search_flexible_dates,
     search_multi_city,
     cheapest_price,
-    drop_layovers,
     sort_offers,
 )
 from .serpapi_client import SerpApiClient, FlightSearchError
@@ -26,7 +25,6 @@ __all__ = [
     "search_flexible_dates",
     "search_multi_city",
     "cheapest_price",
-    "drop_layovers",
     "sort_offers",
     "SerpApiClient",
     "FlightSearchError",

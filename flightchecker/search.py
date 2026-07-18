@@ -20,36 +20,15 @@ def _build_client() -> SerpApiClient:
     return SerpApiClient(api_key=os.getenv("SERPAPI_KEY", ""))
 
 
-# 이 시간(분) 이상 걸리는 장거리 노선은 경유 편도 함께 보여줌
-LONGHAUL_MINUTES = int(float(os.getenv("LONGHAUL_MIN_HOURS", "10")) * 60)
-
-
 def sort_offers(offers: list[FlightOffer]) -> list[FlightOffer]:
     """직항 우선 + 가격 오름차순 정렬.
 
-    직항 그룹이 먼저 오고, 각 그룹 안에서는 싼 순서입니다.
-    (경유가 함께 표시되는 장거리 노선에서도 직항이 항상 위)
+    기본 검색은 직항만이지만, '경유포함' 검색에서도 직항이 항상 위로 옵니다.
     """
     return sorted(
         offers,
         key=lambda o: (0 if o.stops == 0 else 1, o.price if o.price else float("inf")),
     )
-
-
-def drop_layovers(offers: list[FlightOffer]) -> list[FlightOffer]:
-    """경유 제외 정책.
-
-    - 직항이 있는 노선: 직항만 남김 (경유 제거)
-    - 단, 직항 소요가 LONGHAUL_MINUTES(기본 10시간) 이상인 장거리는 경유도 유지
-    - 직항이 아예 없는 노선(대부분 장거리): 경유 그대로 유지
-    """
-    non_stop = [o for o in offers if o.stops == 0]
-    if not non_stop:
-        return offers
-    fastest = min((o.duration_minutes for o in non_stop if o.duration_minutes), default=0)
-    if fastest and fastest >= LONGHAUL_MINUTES:
-        return offers
-    return non_stop
 
 
 def search_flights(
@@ -59,7 +38,7 @@ def search_flights(
     return_date: str | None = None,
     adults: int = 1,
     currency: str = "KRW",
-    non_stop: bool = False,
+    non_stop: bool = True,
     travel_class: int | None = None,
     limit: int = 10,
     client: SerpApiClient | None = None,
@@ -91,7 +70,7 @@ def search_flights(
         FlightOffer.from_api(o, currency=currency, is_round_trip=is_round_trip)
         for o in raw_offers
     ]
-    offers = sort_offers(drop_layovers(offers))
+    offers = sort_offers(offers)
     return offers[:limit]
 
 
@@ -99,7 +78,7 @@ def search_multi_city(
     legs: list[tuple[str, str, str]],
     adults: int = 1,
     currency: str = "KRW",
-    non_stop: bool = False,
+    non_stop: bool = True,
     travel_class: int | None = None,
     limit: int = 10,
     client: SerpApiClient | None = None,
@@ -119,7 +98,7 @@ def search_multi_city(
     )
     raw_offers = raw.get("best_flights", []) + raw.get("other_flights", [])
     offers = [FlightOffer.from_api(o, currency=currency) for o in raw_offers]
-    offers = sort_offers(drop_layovers(offers))
+    offers = sort_offers(offers)
     return offers[:limit]
 
 
@@ -137,7 +116,7 @@ def search_flexible_dates(
     return_date: str | None = None,
     trip_length: int | None = None,
     currency: str = "KRW",
-    non_stop: bool = False,
+    non_stop: bool = True,
     adults: int = 1,
     travel_class: int | None = None,
     client: SerpApiClient | None = None,

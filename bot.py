@@ -58,9 +58,9 @@ HELP_TEXT = (
     "예) `/flight 인천 후쿠오카 2026-06-06 2026-06-07`\n"
     "(공항 이름은 한글로 입력해도 됩니다)\n\n"
     "*옵션* — 명령 뒤에 붙이면 됩니다\n"
-    "`직항` `2명` `비즈니스` `일등석`\n"
+    "`2명` `비즈니스` `일등석` `경유포함`\n"
     "예) `/flight 인천 방콕 2026-06-06 2명 비즈니스`\n"
-    "※ 경유 편은 기본 제외 (직항이 없거나 10시간 이상 장거리만 표시)\n\n"
+    "※ 항상 직항만 검색합니다 (경유도 보려면 `경유포함` 추가)\n\n"
     "*날짜별 최저가* (±3일 비교)\n"
     "`/flex 출발 도착 기준출발일 [귀국일]`\n\n"
     "*다구간* — 출발 도착 날짜를 구간 수만큼 반복\n"
@@ -202,6 +202,8 @@ async def flight_command(update, context):
     opt_note = describe_options(opts)
     if opt_note:
         text = f"⚙ {opt_note}\n{text}"
+    if not offers and opts["non_stop"]:
+        text += "\n\n💡 직항만 검색했습니다. 경유도 보려면 명령 뒤에 `경유포함` 을 붙여보세요."
     await update.message.reply_text(
         text,
         reply_markup=_result_keyboard(origin, destination, departure_date, return_date, price),
@@ -550,11 +552,14 @@ async def _handle_ai_text(update, context, text: str):
                     req["origin"], req["destination"],
                     req["departure_date"], req["return_date"], price,
                 )
+            text = format_results(
+                offers, req["origin"], req["destination"],
+                req["departure_date"], req["return_date"],
+            )
+            if not offers and opts["non_stop"]:
+                text += "\n\n💡 직항만 검색했습니다. 경유도 보고 싶으면 \"경유 포함해서\" 라고 말해보세요."
             await update.message.reply_text(
-                format_results(
-                    offers, req["origin"], req["destination"],
-                    req["departure_date"], req["return_date"],
-                ),
+                text,
                 reply_markup=_result_keyboard(
                     req["origin"], req["destination"],
                     req["departure_date"], req["return_date"], price,
