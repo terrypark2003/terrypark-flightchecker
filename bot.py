@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
@@ -37,6 +38,7 @@ from flightchecker import (
     skyscanner_url,
 )
 from flightchecker.formatter import format_flexible, format_multi, format_results
+from flightchecker.nlsearch import NLParseError, describe_request, parse_travel_request
 
 load_dotenv()
 
@@ -48,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 HELP_TEXT = (
     "✈️ *항공권 검색 봇*\n\n"
+    "*🤖 그냥 문장으로 보내도 됩니다*\n"
+    "예) `다음 주 금요일에 오사카 갔다가 일요일에 오는 표`\n"
+    "예) `방콕 왕복 30만원 밑으로 떨어지면 알려줘`\n\n"
     "*검색*\n"
     "`/flight 출발 도착 출발일 [귀국일]`\n"
     "예) `/flight 인천 후쿠오카 2026-06-06 2026-06-07`\n"
@@ -81,6 +86,8 @@ _api_key = os.getenv("SERPAPI_KEY", "")
 _client = SerpApiClient(api_key=_api_key) if _api_key else None
 _store = WatchStore()
 _history = PriceHistory()
+# 자연어 검색(선택 기능). https://aistudio.google.com/apikey 에서 무료 발급
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 
 
 # ---- 입력 파싱 헬퍼 ----------------------------------------------------
@@ -410,6 +417,152 @@ async def unwatch_command(update, context):
         await update.message.reply_text("해당 번호의 알림을 찾을 수 없습니다.")
 
 
+# ---- 자연어 검색 (Gemini) ---------------------------------------------
+
+async def ai_command(update, context):
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text(
+            "사용법: /ai 원하는 걸 문장으로\n"
+            "예) /ai 다음 주 금요일에 오사카 갔다가 일요일에 오는 표\n"
+            "(명령어 없이 그냥 문장을 보내도 됩니다)"
+        )
+        return
+    await _handle_ai_text(update, context, text)
+
+
+async def on_text(update, context):
+    """명령어가 아닌 일반 문장 → 자연어 검색으로 처리."""
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+    if not GEMINI_KEY:
+        await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+        return
+    await _handle_ai_text(update, context, text)
+
+
+async def _handle_ai_text(update, context, text: str):
+    if not GEMINI_KEY:
+        await update.message.reply_text(
+            "서버에 GEMINI_API_KEY 가 설정되지 않아 자연어 검색을 쓸 수 없습니다.\n"
+            "https://aistudio.google.com/apikey 에서 무료 발급 후 환경변수에 추가하세요."
+        )
+        return
+    if _client is None:
+        await update.message.reply_text("서버에 SERPAPI_KEY 가 설정되지 않았습니다.")
+        return
+
+    await update.message.reply_text("🤖 요청을 이해하는 중입니다...")
+    try:
+        req = await asyncio.to_thread(parse_travel_request, text, GEMINI_KEY)
+    except NLParseError as exc:
+        logger.warning("자연어 해석 실패: %s", exc)
+        await update.message.reply_text(
+            "요청을 이해하지 못했습니다. 조금 더 구체적으로 말씀해 주시거나 /help 명령어를 참고하세요."
+        )
+        return
+
+    if req["intent"] == "unknown":
+        await update.message.reply_text(
+            "🤖 " + (req["clarification"] or "어디에서 어디로, 언제 가는 항공권을 찾을까요?")
+        )
+        return
+
+    summary = describe_request(req)
+    opts = {
+        "non_stop": req["non_stop"],
+        "adults": req["adults"],
+        "travel_class": req["travel_class"],
+    }
+
+    # 가격 알림 등록은 검색 없이 바로 처리 (SerpApi 호출 절약)
+    if req["intent"] == "watch":
+        watch = Watch(
+            chat_id=update.effective_chat.id,
+            origin=req["origin"],
+            destination=req["destination"],
+            departure_date=req["departure_date"],
+            return_date=req["return_date"],
+            target_price=req["target_price"],
+            non_stop=req["non_stop"],
+            adults=req["adults"],
+            travel_class=req["travel_class"],
+        )
+        if _store.add(watch):
+            await update.message.reply_text(
+                f"🤖 이렇게 이해했어요: {summary}\n\n"
+                f"🔔 알림 등록 완료! 목표가 이하가 되면 알려드릴게요.\n"
+                f"평소보다 {DROP_ALERT_PCT:.0f}% 이상 급락해도 알려드립니다. 📉\n"
+                f"(약 {WATCH_INTERVAL // 3600}시간마다 자동 확인 · 목록 /watches)"
+            )
+        else:
+            await update.message.reply_text("이미 같은 조건의 알림이 등록되어 있습니다.")
+        return
+
+    await update.message.reply_text(f"🤖 이렇게 이해했어요: {summary}\n🔎 검색 중입니다...")
+    try:
+        if req["intent"] == "flex":
+            results = await asyncio.to_thread(
+                search_flexible_dates,
+                origin=req["origin"],
+                destination=req["destination"],
+                base_date=req["departure_date"],
+                flex_days=3,
+                return_date=req["return_date"],
+                non_stop=opts["non_stop"],
+                adults=opts["adults"],
+                travel_class=opts["travel_class"],
+                client=_client,
+            )
+            if opts["adults"] == 1 and not opts["travel_class"]:
+                for out_date, ret_date, price in results:
+                    _history.record(req["origin"], req["destination"], out_date, ret_date, price)
+            await update.message.reply_text(
+                format_flexible(results, req["origin"], req["destination"])
+            )
+        elif req["intent"] == "multi":
+            offers = await asyncio.to_thread(
+                search_multi_city,
+                req["legs"],
+                non_stop=opts["non_stop"],
+                adults=opts["adults"],
+                travel_class=opts["travel_class"],
+                client=_client,
+            )
+            await update.message.reply_text(format_multi(offers, req["legs"]))
+        else:  # search
+            offers = await asyncio.to_thread(
+                search_flights,
+                origin=req["origin"],
+                destination=req["destination"],
+                departure_date=req["departure_date"],
+                return_date=req["return_date"],
+                non_stop=opts["non_stop"],
+                adults=opts["adults"],
+                travel_class=opts["travel_class"],
+                client=_client,
+            )
+            price = cheapest_price(offers)
+            if opts["adults"] == 1 and not opts["travel_class"]:
+                _history.record(
+                    req["origin"], req["destination"],
+                    req["departure_date"], req["return_date"], price,
+                )
+            await update.message.reply_text(
+                format_results(
+                    offers, req["origin"], req["destination"],
+                    req["departure_date"], req["return_date"],
+                ),
+                reply_markup=_result_keyboard(
+                    req["origin"], req["destination"],
+                    req["departure_date"], req["return_date"], price,
+                ),
+            )
+    except FlightSearchError as exc:
+        await update.message.reply_text(f"검색 오류: {exc}")
+
+
 # ---- 가격 이력 그래프 --------------------------------------------------
 
 async def history_command(update, context):
@@ -732,6 +885,8 @@ def main() -> None:
         Application,
         CallbackQueryHandler,
         CommandHandler,
+        MessageHandler,
+        filters,
     )
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -748,6 +903,9 @@ def main() -> None:
     app.add_handler(CommandHandler("unwatch", unwatch_command))
     app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("ai", ai_command))
+    # 명령어가 아닌 일반 문장은 자연어 검색으로
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_error_handler(error_handler)
 
@@ -759,6 +917,7 @@ def main() -> None:
         await application.bot.set_my_commands(
             [
                 BotCommand("flight", "항공권 검색"),
+                BotCommand("ai", "자연어로 검색 🤖"),
                 BotCommand("flex", "날짜별 최저가 (±3일)"),
                 BotCommand("multi", "다구간 검색"),
                 BotCommand("watch", "가격 알림 등록"),

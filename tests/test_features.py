@@ -18,6 +18,12 @@ from flightchecker.airports import resolve_airport  # noqa: E402
 from flightchecker.formatter import format_flexible  # noqa: E402
 from flightchecker.links import google_flights_url, skyscanner_url  # noqa: E402
 from flightchecker.models import FlightOffer, FlightSegment  # noqa: E402
+from flightchecker.nlsearch import (  # noqa: E402
+    NLParseError,
+    coerce_request,
+    describe_request,
+    extract_json,
+)
 from flightchecker.options import describe_options, parse_search_options  # noqa: E402
 from flightchecker.pricehistory import PriceHistory  # noqa: E402
 from flightchecker.search import drop_layovers, search_multi_city, sort_offers  # noqa: E402
@@ -297,6 +303,84 @@ def test_booking_links():
     assert s == "https://www.skyscanner.co.kr/transport/flights/icn/fuk/260606/260607/"
     s1 = skyscanner_url("ICN", "FUK", "2026-06-06")
     assert s1 == "https://www.skyscanner.co.kr/transport/flights/icn/fuk/260606/"
+
+
+# ---- 자연어 검색 (Gemini 응답 처리) -------------------------------------
+
+_TODAY = datetime(2026, 7, 18)
+
+
+def test_extract_json_variants():
+    assert extract_json('{"intent": "search"}') == {"intent": "search"}
+    assert extract_json('```json\n{"intent": "flex"}\n```') == {"intent": "flex"}
+    assert extract_json('설명입니다 {"intent": "watch"} 끝') == {"intent": "watch"}
+    try:
+        extract_json("JSON이 아닙니다")
+    except NLParseError:
+        pass
+    else:
+        raise AssertionError("JSON 없는 응답은 NLParseError 여야 함")
+
+
+def test_coerce_request_valid_search():
+    req = coerce_request(
+        {
+            "intent": "search", "origin": "icn", "destination": "KIX",
+            "departure_date": "2026-08-01", "return_date": "2026-08-03",
+            "adults": 2, "non_stop": True, "travel_class": 3,
+        },
+        today=_TODAY,
+    )
+    assert req["intent"] == "search"
+    assert req["origin"] == "ICN" and req["destination"] == "KIX"
+    assert req["adults"] == 2 and req["non_stop"] is True and req["travel_class"] == 3
+    assert "ICN→KIX" in describe_request(req)
+
+
+def test_coerce_request_demotes_past_date():
+    req = coerce_request(
+        {"intent": "search", "origin": "ICN", "destination": "KIX",
+         "departure_date": "2026-01-01"},
+        today=_TODAY,
+    )
+    assert req["intent"] == "unknown"
+    assert req["clarification"]
+
+
+def test_coerce_request_watch_needs_price():
+    base = {"intent": "watch", "origin": "ICN", "destination": "BKK",
+            "departure_date": "2026-09-01"}
+    assert coerce_request(dict(base), today=_TODAY)["intent"] == "unknown"
+    ok = coerce_request(dict(base, target_price=300000), today=_TODAY)
+    assert ok["intent"] == "watch" and ok["target_price"] == 300000
+
+
+def test_coerce_request_multi_legs():
+    req = coerce_request(
+        {"intent": "multi", "legs": [
+            ["ICN", "NRT", "2026-08-01"],
+            ["NRT", "KIX", "2026-08-03"],
+            ["잘못된값", "ICN", "2026-08-05"],   # 무시됨
+        ]},
+        today=_TODAY,
+    )
+    assert req["intent"] == "multi"
+    assert req["legs"] == [("ICN", "NRT", "2026-08-01"), ("NRT", "KIX", "2026-08-03")]
+
+    too_few = coerce_request({"intent": "multi", "legs": [["ICN", "NRT", "2026-08-01"]]},
+                             today=_TODAY)
+    assert too_few["intent"] == "unknown"
+
+
+def test_coerce_request_garbage_is_safe():
+    req = coerce_request(
+        {"intent": "hack", "adults": "많이", "travel_class": 9,
+         "target_price": "비쌈", "origin": "인천공항"},
+        today=_TODAY,
+    )
+    assert req["intent"] == "unknown"
+    assert req["adults"] == 1 and req["travel_class"] is None
+    assert req["target_price"] is None and req["origin"] is None
 
 
 # ---- watch 하위 호환 ---------------------------------------------------
