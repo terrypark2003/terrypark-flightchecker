@@ -26,9 +26,12 @@ class Watch:
     target_price: float
     currency: str = "KRW"
     non_stop: bool = False
+    adults: int = 1
+    travel_class: int | None = None   # SerpApi 기준 (1=이코노미 ... 4=일등석)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     last_price: float | None = None   # 마지막으로 확인한 최저가
     notified: bool = False            # 목표가 도달 알림을 이미 보냈는지
+    last_drop_alert: str | None = None  # 마지막 급락 알림 시각 (반복 알림 방지)
 
     @property
     def key(self) -> str:

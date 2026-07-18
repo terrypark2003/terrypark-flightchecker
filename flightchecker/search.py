@@ -20,6 +20,26 @@ def _build_client() -> SerpApiClient:
     return SerpApiClient(api_key=os.getenv("SERPAPI_KEY", ""))
 
 
+# 이 시간(분) 이상 걸리는 장거리 노선은 경유 편도 함께 보여줌
+LONGHAUL_MINUTES = int(float(os.getenv("LONGHAUL_MIN_HOURS", "10")) * 60)
+
+
+def drop_layovers(offers: list[FlightOffer]) -> list[FlightOffer]:
+    """경유 제외 정책.
+
+    - 직항이 있는 노선: 직항만 남김 (경유 제거)
+    - 단, 직항 소요가 LONGHAUL_MINUTES(기본 10시간) 이상인 장거리는 경유도 유지
+    - 직항이 아예 없는 노선(대부분 장거리): 경유 그대로 유지
+    """
+    non_stop = [o for o in offers if o.stops == 0]
+    if not non_stop:
+        return offers
+    fastest = min((o.duration_minutes for o in non_stop if o.duration_minutes), default=0)
+    if fastest and fastest >= LONGHAUL_MINUTES:
+        return offers
+    return non_stop
+
+
 def search_flights(
     origin: str,
     destination: str,
@@ -28,6 +48,7 @@ def search_flights(
     adults: int = 1,
     currency: str = "KRW",
     non_stop: bool = False,
+    travel_class: int | None = None,
     limit: int = 10,
     client: SerpApiClient | None = None,
 ) -> list[FlightOffer]:
@@ -47,6 +68,7 @@ def search_flights(
         adults=adults,
         currency=currency,
         non_stop=non_stop,
+        travel_class=travel_class,
     )
 
     # SerpApi는 추천 항공편(best_flights)과 그 외(other_flights)로 나눠 반환
@@ -57,6 +79,7 @@ def search_flights(
         FlightOffer.from_api(o, currency=currency, is_round_trip=is_round_trip)
         for o in raw_offers
     ]
+    offers = drop_layovers(offers)
     offers.sort(key=lambda o: o.price if o.price else float("inf"))
     return offers[:limit]
 
@@ -76,6 +99,8 @@ def search_flexible_dates(
     trip_length: int | None = None,
     currency: str = "KRW",
     non_stop: bool = False,
+    adults: int = 1,
+    travel_class: int | None = None,
     client: SerpApiClient | None = None,
 ) -> list[tuple[str, str | None, float | None]]:
     """기준일 ±flex_days 범위에서 날짜별 최저가를 조사.
@@ -109,6 +134,8 @@ def search_flexible_dates(
                 return_date=ret_str,
                 currency=currency,
                 non_stop=non_stop,
+                adults=adults,
+                travel_class=travel_class,
                 client=client,
             )
             results.append((out_str, ret_str, cheapest_price(offers)))

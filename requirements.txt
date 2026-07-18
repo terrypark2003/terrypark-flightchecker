@@ -2,3 +2,5 @@ requests>=2.31.0
 python-dotenv>=1.0.0
 # 텔레그램 봇 + 가격 알림 주기 실행(JobQueue)에 필요
 python-telegram-bot[job-queue]>=21.0
+# 가격 이력 그래프(/history) 렌더링
+matplotlib>=3.8

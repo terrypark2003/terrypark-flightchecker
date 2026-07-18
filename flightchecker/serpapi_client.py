@@ -34,6 +34,7 @@ class SerpApiClient:
         adults: int = 1,
         currency: str = "KRW",
         non_stop: bool = False,
+        travel_class: int | None = None,
         gl: str = "kr",
         hl: str = "ko",
     ) -> dict:
@@ -57,6 +58,8 @@ class SerpApiClient:
             params["return_date"] = return_date
         if non_stop:
             params["stops"] = 1  # 1 = 직항(non-stop)만
+        if travel_class:
+            params["travel_class"] = travel_class  # 1=이코노미 2=프리미엄 3=비즈니스 4=일등석
 
         resp = requests.get(_ENDPOINT, params=params, timeout=self.timeout)
         if resp.status_code != 200:

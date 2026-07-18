@@ -63,6 +63,7 @@ class FlightOffer:
     segments: list[FlightSegment]
     total_duration: str           # 가는편 총 소요 (예: 1h25m)
     is_round_trip: bool = False
+    duration_minutes: int = 0     # 가는편 총 소요 (분) - 경유 제외 정책 판단용
 
     @property
     def stops(self) -> int:
@@ -77,4 +78,5 @@ class FlightOffer:
             segments=[FlightSegment.from_api(s) for s in offer.get("flights", [])],
             total_duration=_fmt_minutes(offer.get("total_duration", 0)),
             is_round_trip=is_round_trip,
+            duration_minutes=int(offer.get("total_duration", 0)),
         )

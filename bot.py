@@ -22,13 +22,18 @@ from dotenv import load_dotenv
 
 from flightchecker import (
     FlightSearchError,
+    PriceHistory,
     SerpApiClient,
     Watch,
     WatchStore,
     cheapest_price,
+    describe_options,
+    google_flights_url,
+    parse_search_options,
     resolve_airport,
     search_flexible_dates,
     search_flights,
+    skyscanner_url,
 )
 from flightchecker.formatter import format_flexible, format_results
 
@@ -46,23 +51,33 @@ HELP_TEXT = (
     "`/flight 출발 도착 출발일 [귀국일]`\n"
     "예) `/flight 인천 후쿠오카 2026-06-06 2026-06-07`\n"
     "(공항 이름은 한글로 입력해도 됩니다)\n\n"
+    "*옵션* — 명령 뒤에 붙이면 됩니다\n"
+    "`직항` `2명` `비즈니스` `일등석`\n"
+    "예) `/flight 인천 방콕 2026-06-06 2명 비즈니스`\n"
+    "※ 경유 편은 기본 제외 (직항이 없거나 10시간 이상 장거리만 표시)\n\n"
     "*날짜별 최저가* (±3일 비교)\n"
-    "`/flex 출발 도착 기준출발일 [귀국일]`\n"
-    "예) `/flex 인천 후쿠오카 2026-06-06 2026-06-07`\n\n"
+    "`/flex 출발 도착 기준출발일 [귀국일]`\n\n"
     "*가격 알림*\n"
     "`/watch 출발 도착 출발일 [귀국일] 목표가`\n"
     "예) `/watch 인천 후쿠오카 2026-06-06 2026-06-07 200000`\n"
     "목표가 이하로 떨어지면 자동으로 알려줍니다.\n"
+    "평소보다 20% 이상 급락해도 알려줍니다. 📉\n"
     "`/watches` 목록 · `/unwatch 번호` 삭제\n\n"
+    "*가격 그래프*: `/history` — 알림 노선의 가격 변화 📈\n\n"
     "*버튼으로 검색*: /menu"
 )
 
 # 가격 알림 검사 주기(초). 기본 6시간.
 WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL_SEC", str(6 * 3600)))
+# 급락 감지: 최근 평균 대비 이만큼(%) 이상 싸지면 알림
+DROP_ALERT_PCT = float(os.getenv("DROP_ALERT_PCT", "20"))
+# 같은 노선 급락 알림 최소 간격(시간)
+DROP_ALERT_COOLDOWN_H = float(os.getenv("DROP_ALERT_COOLDOWN_H", "24"))
 
 _api_key = os.getenv("SERPAPI_KEY", "")
 _client = SerpApiClient(api_key=_api_key) if _api_key else None
 _store = WatchStore()
+_history = PriceHistory()
 
 
 # ---- 입력 파싱 헬퍼 ----------------------------------------------------
@@ -80,6 +95,47 @@ def _resolve_pair(origin: str, destination: str) -> tuple[str, str]:
     return resolve_airport(origin), resolve_airport(destination)
 
 
+# ---- 검색 결과에 붙는 버튼 --------------------------------------------
+
+def _booking_buttons(origin: str, dest: str, dep: str, ret: str | None) -> list:
+    """구글 항공권·스카이스캐너로 바로 가는 예매 링크 버튼 한 줄."""
+    from telegram import InlineKeyboardButton
+
+    return [
+        InlineKeyboardButton("🛒 구글 항공권", url=google_flights_url(origin, dest, dep, ret)),
+        InlineKeyboardButton("🛒 스카이스캐너", url=skyscanner_url(origin, dest, dep, ret)),
+    ]
+
+
+def _booking_keyboard(origin: str, dest: str, dep: str, ret: str | None):
+    from telegram import InlineKeyboardMarkup
+
+    return InlineKeyboardMarkup([_booking_buttons(origin, dest, dep, ret)])
+
+
+def _result_keyboard(origin: str, dest: str, dep: str, ret: str | None, price: float | None):
+    """검색 결과 메시지 아래에 붙는 버튼: 예매 링크 + 알림 등록 + 가격 이력."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    ret_token = ret or "-"
+    rows = [_booking_buttons(origin, dest, dep, ret)]
+    if price:
+        row = []
+        for pct in (5, 10):
+            target = int(price * (100 - pct) / 100 // 100 * 100)  # 100원 단위 절사
+            row.append(
+                InlineKeyboardButton(
+                    f"🔔 알림 -{pct}% ({target:,})",
+                    callback_data=f"aw:{origin}:{dest}:{dep}:{ret_token}:{target}",
+                )
+            )
+        rows.append(row)
+    rows.append(
+        [InlineKeyboardButton("📈 가격 이력 보기", callback_data=f"hist:{origin}:{dest}:{dep}:{ret_token}")]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
 # ---- 명령어 핸들러 ----------------------------------------------------
 
 async def start_command(update, context):
@@ -91,7 +147,7 @@ async def flight_command(update, context):
         await update.message.reply_text("서버에 SERPAPI_KEY 가 설정되지 않았습니다.")
         return
 
-    args = context.args
+    args, opts = parse_search_options(context.args)
     if len(args) < 3:
         await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
         return
@@ -118,14 +174,27 @@ async def flight_command(update, context):
             destination=destination,
             departure_date=departure_date,
             return_date=return_date,
+            non_stop=opts["non_stop"],
+            adults=opts["adults"],
+            travel_class=opts["travel_class"],
             client=_client,
         )
     except FlightSearchError as exc:
         await update.message.reply_text(f"검색 오류: {exc}")
         return
 
+    price = cheapest_price(offers)
+    # 기본 조건(1명/이코노미) 검색만 이력에 기록 - 그래프·급락 감지 기준을 일정하게 유지
+    if opts["adults"] == 1 and not opts["travel_class"]:
+        _history.record(origin, destination, departure_date, return_date, price)
+
+    text = format_results(offers, origin, destination, departure_date, return_date)
+    opt_note = describe_options(opts)
+    if opt_note:
+        text = f"⚙ {opt_note}\n{text}"
     await update.message.reply_text(
-        format_results(offers, origin, destination, departure_date, return_date)
+        text,
+        reply_markup=_result_keyboard(origin, destination, departure_date, return_date, price),
     )
 
 
@@ -134,7 +203,7 @@ async def flex_command(update, context):
         await update.message.reply_text("서버에 SERPAPI_KEY 가 설정되지 않았습니다.")
         return
 
-    args = context.args
+    args, opts = parse_search_options(context.args)
     if len(args) < 3:
         await update.message.reply_text(
             "사용법: /flex 출발 도착 기준출발일 [귀국일]\n"
@@ -163,21 +232,34 @@ async def flex_command(update, context):
             base_date=base_date,
             flex_days=3,
             return_date=return_date,
+            non_stop=opts["non_stop"],
+            adults=opts["adults"],
+            travel_class=opts["travel_class"],
             client=_client,
         )
     except FlightSearchError as exc:
         await update.message.reply_text(f"검색 오류: {exc}")
         return
 
-    await update.message.reply_text(format_flexible(results, origin, destination))
+    # 날짜별 최저가도 이력에 기록 (기본 조건 검색만)
+    if opts["adults"] == 1 and not opts["travel_class"]:
+        for out_date, ret_date, price in results:
+            _history.record(origin, destination, out_date, ret_date, price)
+
+    text = format_flexible(results, origin, destination)
+    opt_note = describe_options(opts)
+    if opt_note:
+        text = f"⚙ {opt_note}\n{text}"
+    await update.message.reply_text(text)
 
 
 async def watch_command(update, context):
-    args = context.args
+    args, opts = parse_search_options(context.args)
     if len(args) < 4:
         await update.message.reply_text(
             "사용법: /watch 출발 도착 출발일 [귀국일] 목표가\n"
-            "예) /watch 인천 후쿠오카 2026-06-06 2026-06-07 200000"
+            "예) /watch 인천 후쿠오카 2026-06-06 2026-06-07 200000\n"
+            "옵션도 됩니다: /watch 인천 방콕 2026-06-06 직항 300000"
         )
         return
 
@@ -213,12 +295,18 @@ async def watch_command(update, context):
         departure_date=departure_date,
         return_date=return_date,
         target_price=target_price,
+        non_stop=opts["non_stop"],
+        adults=opts["adults"],
+        travel_class=opts["travel_class"],
     )
     if _store.add(watch):
         trip = f"{departure_date}~{return_date}" if return_date else departure_date
+        opt_note = describe_options(opts)
         await update.message.reply_text(
-            f"🔔 알림 등록 완료\n{origin}→{destination} {trip}\n"
-            f"목표가 {target_price:,.0f} KRW 이하가 되면 알려드릴게요.\n"
+            f"🔔 알림 등록 완료\n{origin}→{destination} {trip}"
+            + (f" ({opt_note})" if opt_note else "")
+            + f"\n목표가 {target_price:,.0f} KRW 이하가 되면 알려드릴게요.\n"
+            f"평소보다 {DROP_ALERT_PCT:.0f}% 이상 급락해도 알려드립니다. 📉\n"
             f"(약 {WATCH_INTERVAL // 3600}시간마다 자동 확인)"
         )
     else:
@@ -234,10 +322,14 @@ async def watches_command(update, context):
     for i, w in enumerate(items, start=1):
         trip = f"{w.departure_date}~{w.return_date}" if w.return_date else w.departure_date
         last = f" (최근 {w.last_price:,.0f})" if w.last_price else ""
+        opt_note = describe_options(
+            {"non_stop": w.non_stop, "adults": w.adults, "travel_class": w.travel_class}
+        )
         lines.append(
             f"{i}. {w.origin}→{w.destination} {trip} · 목표 {w.target_price:,.0f} KRW{last}"
+            + (f" · {opt_note}" if opt_note else "")
         )
-    lines.append("\n삭제: /unwatch 번호")
+    lines.append("\n삭제: /unwatch 번호 · 가격 그래프: /history 번호")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -255,10 +347,90 @@ async def unwatch_command(update, context):
         await update.message.reply_text("해당 번호의 알림을 찾을 수 없습니다.")
 
 
+# ---- 가격 이력 그래프 --------------------------------------------------
+
+async def history_command(update, context):
+    """알림 등록한 노선의 가격 변화 그래프를 이미지로 전송."""
+    chat_id = update.effective_chat.id
+    items = _store.list_for(chat_id)
+    if not items:
+        await update.message.reply_text(
+            "등록된 가격 알림이 없습니다.\n"
+            "/watch 로 알림을 등록하면 가격 이력이 자동으로 쌓이고,\n"
+            "/history 로 그래프를 볼 수 있습니다."
+        )
+        return
+
+    args = context.args
+    if args and args[0].isdigit():
+        index = int(args[0])
+    elif len(items) == 1:
+        index = 1
+    else:
+        lines = ["📈 어느 노선의 그래프를 볼까요? /history 번호 로 선택하세요:"]
+        for i, w in enumerate(items, start=1):
+            trip = f"{w.departure_date}~{w.return_date}" if w.return_date else w.departure_date
+            lines.append(f"{i}. {w.origin}→{w.destination} {trip}")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if index < 1 or index > len(items):
+        await update.message.reply_text("해당 번호의 알림을 찾을 수 없습니다. /watches 로 확인하세요.")
+        return
+
+    w = items[index - 1]
+    await _send_history_chart(
+        context.bot, chat_id, w.origin, w.destination,
+        w.departure_date, w.return_date, target_price=w.target_price,
+    )
+
+
+async def _send_history_chart(bot, chat_id, origin, dest, dep, ret, target_price=None):
+    """가격 이력이 충분하면 그래프 전송, 아니면 안내 메시지."""
+    points = _history.series(origin, dest, dep, ret)
+    trip = f"{dep}~{ret}" if ret else dep
+    if len(points) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"📈 {origin}→{dest} {trip}\n"
+                f"아직 가격 기록이 {len(points)}개뿐입니다.\n"
+                "검색하거나 알림이 자동 확인될 때마다 기록이 쌓입니다. 나중에 다시 확인해 주세요!"
+            ),
+        )
+        return
+
+    from flightchecker.chart import render_price_chart
+
+    title = f"{origin} -> {dest}  ({dep}" + (f" ~ {ret})" if ret else ")")
+    png = render_price_chart(points, title, target_price=target_price)
+    low = min(p for _, p in points)
+    await bot.send_photo(
+        chat_id=chat_id,
+        photo=png,
+        caption=(
+            f"📈 {origin}→{dest} {trip}\n"
+            f"기록 {len(points)}개 · 역대 최저 {low:,.0f} KRW"
+            + (f" · 목표 {target_price:,.0f} KRW" if target_price else "")
+        ),
+    )
+
+
 # ---- 가격 알림 주기 검사 (JobQueue) -----------------------------------
 
+def _drop_cooldown_passed(w: Watch) -> bool:
+    """급락 알림을 다시 보내도 될 만큼 시간이 지났는지."""
+    if not w.last_drop_alert:
+        return True
+    try:
+        last = datetime.fromisoformat(w.last_drop_alert)
+    except ValueError:
+        return True
+    return datetime.now() - last >= timedelta(hours=DROP_ALERT_COOLDOWN_H)
+
+
 async def check_watches(context):
-    """등록된 모든 watch를 검사해 목표가 도달 시 알림."""
+    """등록된 모든 watch를 검사해 목표가 도달·가격 급락 시 알림."""
     if _client is None:
         return
     for w in _store.all():
@@ -269,6 +441,8 @@ async def check_watches(context):
                 departure_date=w.departure_date,
                 return_date=w.return_date,
                 non_stop=w.non_stop,
+                adults=w.adults,
+                travel_class=w.travel_class,
                 client=_client,
             )
         except Exception as exc:
@@ -276,10 +450,16 @@ async def check_watches(context):
             continue
 
         price = cheapest_price(offers)
+        # 급락 판단 기준(최근 평균)은 이번 가격을 기록하기 전에 계산
+        baseline = _history.baseline(w.origin, w.destination, w.departure_date, w.return_date)
+        if w.adults == 1 and not w.travel_class:
+            _history.record(w.origin, w.destination, w.departure_date, w.return_date, price)
         w.last_price = price
+        trip = f"{w.departure_date}~{w.return_date}" if w.return_date else w.departure_date
+        keyboard = _booking_keyboard(w.origin, w.destination, w.departure_date, w.return_date)
+
         if price is not None and price <= w.target_price and not w.notified:
             w.notified = True
-            trip = f"{w.departure_date}~{w.return_date}" if w.return_date else w.departure_date
             await context.bot.send_message(
                 chat_id=w.chat_id,
                 text=(
@@ -288,10 +468,30 @@ async def check_watches(context):
                     f"자세히: /flight {w.origin} {w.destination} {w.departure_date}"
                     + (f" {w.return_date}" if w.return_date else "")
                 ),
+                reply_markup=keyboard,
             )
         elif price is not None and price > w.target_price:
             # 다시 올라가면 알림 재무장
             w.notified = False
+
+        # 급락 감지: 목표가와 무관하게, 최근 평균보다 크게 싸지면 알림
+        if (
+            price is not None
+            and baseline
+            and price <= baseline * (1 - DROP_ALERT_PCT / 100)
+            and _drop_cooldown_passed(w)
+        ):
+            w.last_drop_alert = datetime.now().isoformat(timespec="seconds")
+            drop_pct = (1 - price / baseline) * 100
+            await context.bot.send_message(
+                chat_id=w.chat_id,
+                text=(
+                    f"📉 가격 급락 감지!\n{w.origin}→{w.destination} {trip}\n"
+                    f"최근 평균 {baseline:,.0f} KRW → 현재 {price:,.0f} KRW ({drop_pct:.0f}%↓)\n"
+                    f"그래프: /history"
+                ),
+                reply_markup=keyboard,
+            )
     _store.save()  # 갱신된 last_price / notified 상태를 디스크에 반영
 
 
@@ -349,6 +549,21 @@ async def on_button(update, context):
     stage, _, value = query.data.partition(":")
     wiz = context.user_data.setdefault("wizard", {})
 
+    if stage == "aw":
+        # 검색 결과의 "알림 등록" 버튼: aw:출발:도착:출발일:귀국일|-:목표가
+        await _register_watch_from_button(query, value)
+        return
+    if stage == "hist":
+        # 검색 결과의 "가격 이력" 버튼: hist:출발:도착:출발일:귀국일|-
+        parts = value.split(":")
+        if len(parts) == 4:
+            origin, dest, dep, ret = parts
+            await _send_history_chart(
+                query.get_bot(), query.message.chat_id,
+                origin, dest, dep, None if ret == "-" else ret,
+            )
+        return
+
     if stage == "origin":
         wiz["origin"] = value
         await query.edit_message_text(
@@ -388,6 +603,38 @@ def _return_keyboard():
     return InlineKeyboardMarkup(rows)
 
 
+async def _register_watch_from_button(query, value: str) -> None:
+    """검색 결과의 '알림 -N%' 버튼으로 watch를 즉시 등록."""
+    parts = value.split(":")
+    if len(parts) != 5:
+        return
+    origin, dest, dep, ret_token, target_str = parts
+    ret = None if ret_token == "-" else ret_token
+    try:
+        target_price = float(target_str)
+    except ValueError:
+        return
+
+    watch = Watch(
+        chat_id=query.message.chat_id,
+        origin=origin,
+        destination=dest,
+        departure_date=dep,
+        return_date=ret,
+        target_price=target_price,
+    )
+    trip = f"{dep}~{ret}" if ret else dep
+    if _store.add(watch):
+        await query.message.reply_text(
+            f"🔔 알림 등록 완료\n{origin}→{dest} {trip}\n"
+            f"목표가 {target_price:,.0f} KRW 이하가 되면 알려드릴게요.\n"
+            f"평소보다 {DROP_ALERT_PCT:.0f}% 이상 급락해도 알려드립니다. 📉\n"
+            f"(약 {WATCH_INTERVAL // 3600}시간마다 자동 확인 · 목록 /watches)"
+        )
+    else:
+        await query.message.reply_text("이미 같은 조건의 알림이 등록되어 있습니다.")
+
+
 async def _run_wizard_search(query, context, wiz):
     if _client is None:
         await query.edit_message_text("서버에 SERPAPI_KEY 가 설정되지 않았습니다.")
@@ -402,7 +649,12 @@ async def _run_wizard_search(query, context, wiz):
     except FlightSearchError as exc:
         await query.edit_message_text(f"검색 오류: {exc}")
         return
-    await query.edit_message_text(format_results(offers, origin, dest, out, ret))
+    price = cheapest_price(offers)
+    _history.record(origin, dest, out, ret, price)
+    await query.edit_message_text(
+        format_results(offers, origin, dest, out, ret),
+        reply_markup=_result_keyboard(origin, dest, out, ret, price),
+    )
 
 
 async def error_handler(update, context):
@@ -430,6 +682,7 @@ def main() -> None:
     app.add_handler(CommandHandler("watch", watch_command))
     app.add_handler(CommandHandler("watches", watches_command))
     app.add_handler(CommandHandler("unwatch", unwatch_command))
+    app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_error_handler(error_handler)
@@ -446,6 +699,7 @@ def main() -> None:
                 BotCommand("watch", "가격 알림 등록"),
                 BotCommand("watches", "내 알림 목록"),
                 BotCommand("unwatch", "알림 삭제"),
+                BotCommand("history", "가격 이력 그래프"),
                 BotCommand("menu", "버튼으로 검색"),
                 BotCommand("help", "사용법"),
             ]
