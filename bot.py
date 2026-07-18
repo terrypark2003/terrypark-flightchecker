@@ -459,7 +459,8 @@ async def _handle_ai_text(update, context, text: str):
     except NLParseError as exc:
         logger.warning("자연어 해석 실패: %s", exc)
         await update.message.reply_text(
-            "요청을 이해하지 못했습니다. 조금 더 구체적으로 말씀해 주시거나 /help 명령어를 참고하세요."
+            "요청을 이해하지 못했습니다. 조금 더 구체적으로 말씀해 주시거나 /help 명령어를 참고하세요.\n"
+            f"(원인: {str(exc)[:250]})"
         )
         return
 
@@ -876,7 +877,12 @@ async def _run_wizard_search(query, context, wiz):
 async def error_handler(update, context):
     logger.error("처리 중 예외 발생", exc_info=context.error)
     if update and getattr(update, "message", None):
-        await update.message.reply_text("처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.")
+        err = context.error
+        detail = f"{type(err).__name__}: {err}" if err else "원인 미상"
+        await update.message.reply_text(
+            "처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.\n"
+            f"(오류: {detail[:250]})"
+        )
 
 
 def main() -> None:
