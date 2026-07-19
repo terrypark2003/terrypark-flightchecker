@@ -17,6 +17,7 @@ from datetime import datetime, timedelta  # noqa: E402
 from flightchecker.airports import resolve_airport  # noqa: E402
 from flightchecker.formatter import format_flexible  # noqa: E402
 from flightchecker.links import google_flights_url, skyscanner_url  # noqa: E402
+from flightchecker.mileage import mileage_note, skypass_estimate  # noqa: E402
 from flightchecker.models import FlightOffer, FlightSegment  # noqa: E402
 from flightchecker.nlsearch import (  # noqa: E402
     NLParseError,
@@ -329,6 +330,39 @@ def test_booking_links():
     assert s == "https://www.skyscanner.co.kr/transport/flights/icn/fuk/260606/260607/"
     s1 = skyscanner_url("ICN", "FUK", "2026-06-06")
     assert s1 == "https://www.skyscanner.co.kr/transport/flights/icn/fuk/260606/"
+
+
+# ---- 스카이패스 마일리지 추정 -------------------------------------------
+
+def test_skypass_estimate_zones():
+    # 일본 왕복 이코노미: 15,000 x 2
+    est = skypass_estimate("ICN", "FUK", round_trip=True)
+    assert est["miles"] == 30000 and est["cabin"] == "이코노미"
+    # 편도 비즈니스(프레스티지)
+    est = skypass_estimate("ICN", "BKK", round_trip=False, travel_class=3)
+    assert est["miles"] == 30000 and est["cabin"] == "프레스티지"
+    # 국내선, 도착이 한국인 역방향도 인식
+    assert skypass_estimate("GMP", "CJU", round_trip=False)["miles"] == 5000
+    assert skypass_estimate("NRT", "ICN", round_trip=False)["miles"] == 15000
+    # 장거리
+    assert skypass_estimate("ICN", "JFK", round_trip=True)["miles"] == 70000
+
+
+def test_skypass_estimate_not_applicable():
+    assert skypass_estimate("NRT", "BKK", round_trip=True) is None      # 한국 발착 아님
+    assert skypass_estimate("ICN", "XXX", round_trip=True) is None      # 모르는 공항
+    assert skypass_estimate("GMP", "CJU", True, travel_class=4) is None  # 국내선 일등석 없음
+
+
+def test_mileage_note_verdict():
+    # 일본 왕복 30,000마일, 현금 20만원 → 1마일 6.7원 → 현금 유리
+    note = mileage_note("ICN", "FUK", True, 200000)
+    assert "30,000마일" in note and "현금 구매가 나을 수" in note
+    # 같은 마일에 현금 60만원 → 1마일 20원 → 마일 이득
+    note = mileage_note("ICN", "FUK", True, 600000)
+    assert "마일리지 사용이 이득" in note
+    # 해당 없는 노선은 빈 문자열
+    assert mileage_note("NRT", "BKK", True, 200000) == ""
 
 
 # ---- 자연어 검색 (Gemini 응답 처리) -------------------------------------

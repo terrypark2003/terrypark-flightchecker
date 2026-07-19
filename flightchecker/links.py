@@ -9,6 +9,9 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import quote
 
+# 대한항공 보너스 좌석 조회 (노선/날짜 딥링크는 지원되지 않아 조회 페이지로 연결)
+KOREAN_AIR_AWARD_URL = "https://www.koreanair.com/skypass/use-miles/award-availability"
+
 
 def google_flights_url(
     origin: str,

@@ -38,6 +38,8 @@ from flightchecker import (
     skyscanner_url,
 )
 from flightchecker.formatter import format_flexible, format_multi, format_results
+from flightchecker.links import KOREAN_AIR_AWARD_URL
+from flightchecker.mileage import mileage_note, skypass_estimate
 from flightchecker.nlsearch import NLParseError, describe_request, parse_travel_request
 
 load_dotenv()
@@ -72,6 +74,8 @@ HELP_TEXT = (
     "평소보다 20% 이상 급락해도 알려줍니다. 📉\n"
     "`/watches` 목록 · `/unwatch 번호` 삭제\n\n"
     "*가격 그래프*: `/history` — 알림 노선의 가격 변화 📈\n\n"
+    "*마일리지* 🎫: 한국 발착 노선 검색 시 스카이패스 예상 공제와\n"
+    "1마일당 가치(현금 vs 마일 판단)를 자동 표시\n\n"
     "*버튼으로 검색*: /menu"
 )
 
@@ -143,6 +147,10 @@ def _result_keyboard(origin: str, dest: str, dep: str, ret: str | None, price: f
     rows.append(
         [InlineKeyboardButton("📈 가격 이력 보기", callback_data=f"hist:{origin}:{dest}:{dep}:{ret_token}")]
     )
+    if skypass_estimate(origin, dest, round_trip=bool(ret)) is not None:
+        rows.append(
+            [InlineKeyboardButton("🎫 대한항공 보너스 좌석 조회", url=KOREAN_AIR_AWARD_URL)]
+        )
     return InlineKeyboardMarkup(rows)
 
 
@@ -204,6 +212,9 @@ async def flight_command(update, context):
         text = f"⚙ {opt_note}\n{text}"
     if not offers and opts["non_stop"]:
         text += "\n\n💡 직항만 검색했습니다. 경유도 보려면 명령 뒤에 `경유포함` 을 붙여보세요."
+    miles = mileage_note(origin, destination, bool(return_date), price, opts["travel_class"])
+    if miles:
+        text += f"\n\n{miles}"
     await update.message.reply_text(
         text,
         reply_markup=_result_keyboard(origin, destination, departure_date, return_date, price),
@@ -558,6 +569,12 @@ async def _handle_ai_text(update, context, text: str):
             )
             if not offers and opts["non_stop"]:
                 text += "\n\n💡 직항만 검색했습니다. 경유도 보고 싶으면 \"경유 포함해서\" 라고 말해보세요."
+            miles = mileage_note(
+                req["origin"], req["destination"],
+                bool(req["return_date"]), price, opts["travel_class"],
+            )
+            if miles:
+                text += f"\n\n{miles}"
             await update.message.reply_text(
                 text,
                 reply_markup=_result_keyboard(
@@ -873,8 +890,12 @@ async def _run_wizard_search(query, context, wiz):
         return
     price = cheapest_price(offers)
     _history.record(origin, dest, out, ret, price)
+    text = format_results(offers, origin, dest, out, ret)
+    miles = mileage_note(origin, dest, bool(ret), price)
+    if miles:
+        text += f"\n\n{miles}"
     await query.edit_message_text(
-        format_results(offers, origin, dest, out, ret),
+        text,
         reply_markup=_result_keyboard(origin, dest, out, ret, price),
     )
 
