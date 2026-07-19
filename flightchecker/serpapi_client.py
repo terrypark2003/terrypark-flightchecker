@@ -37,12 +37,15 @@ class SerpApiClient:
         currency: str = "KRW",
         non_stop: bool = False,
         travel_class: int | None = None,
+        departure_token: str | None = None,
         gl: str = "kr",
         hl: str = "ko",
     ) -> dict:
         """google_flights 검색 후 원본 JSON 응답(dict) 반환.
 
         날짜 형식은 YYYY-MM-DD. return_date를 주면 왕복(type=1), 없으면 편도(type=2).
+        왕복 1차 응답의 departure_token을 다시 넘기면 해당 가는편에 대한
+        오는편 목록(확정 왕복 총액 포함)을 돌려줍니다.
         """
         params: dict[str, str | int] = {
             "engine": "google_flights",
@@ -62,6 +65,8 @@ class SerpApiClient:
             params["stops"] = 1  # 1 = 직항(non-stop)만
         if travel_class:
             params["travel_class"] = travel_class  # 1=이코노미 2=프리미엄 3=비즈니스 4=일등석
+        if departure_token:
+            params["departure_token"] = departure_token
 
         return self._request(params)
 

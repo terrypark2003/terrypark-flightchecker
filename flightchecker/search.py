@@ -40,6 +40,7 @@ def search_flights(
     currency: str = "KRW",
     non_stop: bool = True,
     travel_class: int | None = None,
+    departure_token: str | None = None,
     limit: int = 10,
     client: SerpApiClient | None = None,
 ) -> list[FlightOffer]:
@@ -48,6 +49,8 @@ def search_flights(
     예)
         search_flights("ICN", "FUK", "2026-06-06", "2026-06-07")
 
+    왕복 검색 결과의 departure_token을 다시 넘기면 그 가는편에 대한
+    오는편 목록(확정 왕복 총액)을 반환합니다.
     client를 직접 주입할 수 있어 봇에서는 클라이언트를 재사용할 수 있습니다.
     """
     client = client or _build_client()
@@ -60,6 +63,7 @@ def search_flights(
         currency=currency,
         non_stop=non_stop,
         travel_class=travel_class,
+        departure_token=departure_token,
     )
 
     # SerpApi는 추천 항공편(best_flights)과 그 외(other_flights)로 나눠 반환

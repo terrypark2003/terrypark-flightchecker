@@ -127,12 +127,30 @@ def _booking_keyboard(origin: str, dest: str, dep: str, ret: str | None):
     return InlineKeyboardMarkup([_booking_buttons(origin, dest, dep, ret)])
 
 
-def _result_keyboard(origin: str, dest: str, dep: str, ret: str | None, price: float | None):
-    """검색 결과 메시지 아래에 붙는 버튼: 예매 링크 + 알림 등록 + 가격 이력."""
+def _result_keyboard(
+    origin: str,
+    dest: str,
+    dep: str,
+    ret: str | None,
+    price: float | None,
+    outbound_count: int = 0,
+):
+    """검색 결과 메시지 아래에 붙는 버튼: 가는편 선택 + 예매 링크 + 알림 + 이력."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     ret_token = ret or "-"
-    rows = [_booking_buttons(origin, dest, dep, ret)]
+    rows = []
+    if outbound_count:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"🛫 {i + 1}번",
+                    callback_data=f"ob:{i}:{origin}:{dest}:{dep}",
+                )
+                for i in range(outbound_count)
+            ]
+        )
+    rows.append(_booking_buttons(origin, dest, dep, ret))
     if price:
         row = []
         for pct in (5, 10):
@@ -152,6 +170,91 @@ def _result_keyboard(origin: str, dest: str, dep: str, ret: str | None, price: f
             [InlineKeyboardButton("🎫 대한항공 보너스 좌석 조회", url=KOREAN_AIR_AWARD_URL)]
         )
     return InlineKeyboardMarkup(rows)
+
+
+RT_HINT = (
+    "\n\n🛫 위 목록은 가는편 일정입니다. 아래 번호로 가는편을 선택하면 "
+    "오는편 시간표와 확정 왕복 총액을 보여드려요."
+)
+
+
+def _prepare_rt_selection(context, origin, dest, dep, ret, opts, offers) -> int:
+    """왕복 결과의 가는편 선택 상태를 저장. 반환: 선택 버튼 개수(0이면 미지원)."""
+    if not ret:
+        return 0
+    shown = offers[:5]
+    tokens = [o.departure_token for o in shown]
+    if not any(tokens):
+        return 0
+    context.user_data["rt"] = {
+        "origin": origin, "dest": dest, "dep": dep, "ret": ret,
+        "opts": opts, "tokens": tokens,
+    }
+    return len(shown)
+
+
+async def _show_return_flights(query, context, value: str) -> None:
+    """가는편 선택 버튼 처리: 오는편 목록 + 확정 왕복 총액 표시."""
+    parts = value.split(":")
+    if len(parts) != 4:
+        return
+    idx_str, origin, dest, dep = parts
+    state = context.user_data.get("rt")
+    if (
+        not state
+        or not idx_str.isdigit()
+        or (state["origin"], state["dest"], state["dep"]) != (origin, dest, dep)
+        or int(idx_str) >= len(state["tokens"])
+    ):
+        await query.message.reply_text(
+            "이 검색은 만료됐어요. 같은 조건으로 다시 검색한 뒤 선택해 주세요."
+        )
+        return
+    idx = int(idx_str)
+    token = state["tokens"][idx]
+    if not token:
+        await query.message.reply_text("이 가는편은 오는편 조회를 지원하지 않아요. 다른 편을 선택해 주세요.")
+        return
+
+    opts = state["opts"]
+    await query.message.reply_text(f"🔎 가는편 {idx + 1}번 기준 오는편을 검색 중입니다...")
+    try:
+        returns = search_flights(
+            origin=state["origin"],
+            destination=state["dest"],
+            departure_date=state["dep"],
+            return_date=state["ret"],
+            non_stop=opts["non_stop"],
+            adults=opts["adults"],
+            travel_class=opts["travel_class"],
+            departure_token=token,
+            client=_client,
+        )
+    except FlightSearchError as exc:
+        await query.message.reply_text(f"오는편 검색 오류: {exc}")
+        return
+
+    title = (
+        f"🛬 오는편 선택 — {state['dest']} → {state['origin']} {state['ret']}\n"
+        f"(가는편 {idx + 1}번 포함, 가격은 확정 왕복 총액)"
+    )
+    if not returns:
+        await query.message.reply_text(f"{title}\n\n오는편을 찾지 못했습니다.")
+        return
+
+    from flightchecker.formatter import format_offer
+
+    body = "\n\n".join(format_offer(o, i) for i, o in enumerate(returns[:5], start=1))
+    final_price = cheapest_price(returns)
+    footer = (
+        f"\n\n최저 총액: {final_price:,.0f} KRW" if final_price else ""
+    ) + f" · 오는편 {len(returns)}건 중 상위 {min(5, len(returns))}건"
+    await query.message.reply_text(
+        f"{title}\n\n{body}{footer}",
+        reply_markup=_result_keyboard(
+            state["origin"], state["dest"], state["dep"], state["ret"], final_price
+        ),
+    )
 
 
 # ---- 명령어 핸들러 ----------------------------------------------------
@@ -215,9 +318,16 @@ async def flight_command(update, context):
     miles = mileage_note(origin, destination, bool(return_date), price, opts["travel_class"])
     if miles:
         text += f"\n\n{miles}"
+    outbound_count = _prepare_rt_selection(
+        context, origin, destination, departure_date, return_date, opts, offers
+    )
+    if outbound_count:
+        text += RT_HINT
     await update.message.reply_text(
         text,
-        reply_markup=_result_keyboard(origin, destination, departure_date, return_date, price),
+        reply_markup=_result_keyboard(
+            origin, destination, departure_date, return_date, price, outbound_count
+        ),
     )
 
 
@@ -575,11 +685,17 @@ async def _handle_ai_text(update, context, text: str):
             )
             if miles:
                 text += f"\n\n{miles}"
+            outbound_count = _prepare_rt_selection(
+                context, req["origin"], req["destination"],
+                req["departure_date"], req["return_date"], opts, offers,
+            )
+            if outbound_count:
+                text += RT_HINT
             await update.message.reply_text(
                 text,
                 reply_markup=_result_keyboard(
                     req["origin"], req["destination"],
-                    req["departure_date"], req["return_date"], price,
+                    req["departure_date"], req["return_date"], price, outbound_count,
                 ),
             )
     except FlightSearchError as exc:
@@ -788,6 +904,10 @@ async def on_button(update, context):
     stage, _, value = query.data.partition(":")
     wiz = context.user_data.setdefault("wizard", {})
 
+    if stage == "ob":
+        # 왕복 검색의 "가는편 선택" 버튼: ob:번호:출발:도착:출발일
+        await _show_return_flights(query, context, value)
+        return
     if stage == "aw":
         # 검색 결과의 "알림 등록" 버튼: aw:출발:도착:출발일:귀국일|-:목표가
         await _register_watch_from_button(query, value)
@@ -894,9 +1014,13 @@ async def _run_wizard_search(query, context, wiz):
     miles = mileage_note(origin, dest, bool(ret), price)
     if miles:
         text += f"\n\n{miles}"
+    default_opts = {"non_stop": True, "adults": 1, "travel_class": None}
+    outbound_count = _prepare_rt_selection(context, origin, dest, out, ret, default_opts, offers)
+    if outbound_count:
+        text += RT_HINT
     await query.edit_message_text(
         text,
-        reply_markup=_result_keyboard(origin, dest, out, ret, price),
+        reply_markup=_result_keyboard(origin, dest, out, ret, price, outbound_count),
     )
 
 

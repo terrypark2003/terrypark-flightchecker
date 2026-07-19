@@ -177,6 +177,50 @@ def test_sort_offers_nonstop_first_then_price():
     ]
 
 
+# ---- 왕복 2단계 (가는편 선택 → 오는편) ----------------------------------
+
+_RAW_OFFER = {
+    "flights": [
+        {
+            "departure_airport": {"id": "ICN", "time": "2026-07-26 14:25"},
+            "arrival_airport": {"id": "FUK", "time": "2026-07-26 16:00"},
+            "duration": 95,
+            "airline": "Air Seoul",
+            "flight_number": "RS 731",
+        }
+    ],
+    "total_duration": 95,
+    "price": 321900,
+    "departure_token": "tok-abc123",
+}
+
+
+class _FakeRTClient:
+    def __init__(self):
+        self.kwargs = None
+
+    def flight_offers(self, **kwargs):
+        self.kwargs = kwargs
+        return {"best_flights": [_RAW_OFFER], "other_flights": []}
+
+
+def test_offer_parses_departure_token():
+    offer = FlightOffer.from_api(_RAW_OFFER, currency="KRW", is_round_trip=True)
+    assert offer.departure_token == "tok-abc123"
+
+
+def test_search_flights_passes_departure_token():
+    from flightchecker.search import search_flights
+
+    fake = _FakeRTClient()
+    offers = search_flights(
+        "ICN", "FUK", "2026-07-26", "2026-07-27",
+        departure_token="tok-abc123", client=fake,
+    )
+    assert fake.kwargs["departure_token"] == "tok-abc123"
+    assert offers[0].price == 321900
+
+
 # ---- 다구간 검색 -------------------------------------------------------
 
 class _FakeMultiClient:
